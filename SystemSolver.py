@@ -1,68 +1,55 @@
 import numpy as np
 import numpy.typing as npt
+from scipy.integrate import solve_ivp
+from SystemModels import chain
 
-def chain(masses: npt.ArrayLike, springs: npt.ArrayLike, dampers: npt.ArrayLike = None) -> tuple[npt.NDArray, npt.NDArray] | tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
+def equation_of_motions(
+    t: float,
+    y: npt.ArrayLike, 
+    M: npt,ArrayLike, 
+    C: npt.ArrayLike, 
+    K: npt.ArrayLike
+    ) -> tuple[npt.ArrayLike]:
     """
-    Creates the mass and spring matrix with size n and also the damper matrix if supplied.
+    Calculates the velocity and acceleration of the system at a given time.
+    The system is defined by the mass matrix, stiffness matrix, and damping matrix.
 
     Parameters
     ----------
-    masses : array_like with shape (n,)
-        The mass of the lumped masses in the system.
-    springs : array_like with shape (n,) | (n+1,)
-        The spring constants between the lumped masses.
-    dampers : array_like with shape (n,) | (n+1,), optional
-        The damper constants of the dampers in between. Ignored by default.
+    t : array_like with shape (n,) (1D-vector)
+        The time points to evaluate the system at.
+    y : array_like with shape (n,) (1D-vector)
+        The position and velocity of the system.
+    M : array_like with shape (n, n) (2D-vector)
+        The mass matrix of the system.
+    C : array_like with shape (n, n) (2D-vector)
+        The damping matrix of the system.
+    K : array_like with shape (n, n) (2D-vector)
+        The stiffness matrix of the system.
 
     Returns
     -------
-    tuple of np arrays with shape (n, n)
-        Contains the mass matrix, spring matrix, and damper matrix if provided.
+    tuple of np arrays with shape (n,) (1D-vector)
+        The velocity and acceleration of the system.
     """
-    springs = np.asarray(springs)
-    matrix_size = len(masses)
-    
-    # Creating mass matrix.
-    mass_matrix = np.eye(matrix_size)
-    np.fill_diagonal(mass_matrix, masses)
-    
-    def create_matrix(actuator: npt.NDArray) -> npt.NDArray:
-        matrix = np.zeros((matrix_size, matrix_size))
-        diag_indicies = np.diag_indices_from(matrix)
-        # If there is no actuator on the end.
-        if matrix_size == len(actuator):
-            # Main diagonal.
-            matrix[diag_indicies] = actuator + np.concatenate((actuator[1:], [0]))
-            # Sub diagonals.
-            matrix[1:, :-1][np.diag_indices(matrix_size - 1)] = -actuator[1:]
-            matrix[:-1, 1:][np.diag_indices(matrix_size - 1)] = -actuator[1:]
-        # If there is an actuator on the end.
-        elif matrix_size + 1 == len(actuator):
-            # Main diagonals.
-            matrix[diag_indicies] = actuator[:-1] + actuator[1:]
-            # Sub diagonals.
-            matrix[1:, :-1][np.diag_indices(matrix_size - 1)] = -actuator[1:-1]
-            matrix[:-1, 1:][np.diag_indices(matrix_size - 1)] = -actuator[1:-1]
-        else:
-            raise ValueError(f"Length of mass and spring vectors aren't compatible (len(masses) = {matrix_size}, len(springs) = {len(actuator)}).")
-        return matrix
-        
-    # Creating the stiffness matrix.
-    stiffness_matrix = create_matrix(springs)
-    if dampers is not None:
-        # Creating the damper matrix.
-        dampers = np.asarray(dampers)
-        damper_matrix = create_matrix(dampers)
-        return mass_matrix, stiffness_matrix, damper_matrix
-    
-    return mass_matrix, stiffness_matrix
+    #Splitting the 1D input with [position, velocity] into two 1D arrays
+    y, ydot = np.split(y, 2)
 
-# Example.
-if __name__ == "__main__":
-    masses = [1, 2, 3]
-    springs = [3, 5, 2]
-    dampers = [5, 3, 7, 8]
-    matrices = chain(masses, springs, dampers)
-    print(f"Mass matrix:\n{matrices[0]}\n")
-    print(f"Spring matrix:\n{matrices[1]}\n")
-    print(f"Damper matrix:\n{matrices[2]}")
+    # Equation of motion for the system
+    # [M]*y'' + [C]*y' + [K]*y = 0
+    # Isolate ddy/dt:
+    # y'' = [M]^-1 * (-[C]*y' - [K]*y)
+
+    ydotdot = np.linalg.inv(M) @ (-C @ydot - K @ y)
+
+    # Returning velocity and acceleration as a concatenated 1D array
+    return np.concatenate((ydot, ydotdot))
+
+
+y_ic = np.array([0, 0, 0, 0, 0, 1])
+t_duration = (10)
+M, C, K = chain([1, 1, 1], [3, 2, 1], [0.2, 0.2, 0.2])
+Ivp_Results = solve_ivp(equation_of_motions, t_duration, y_ic, method='RK45')
+
+print(Ivp_Results.y)
+#Example
