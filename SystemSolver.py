@@ -100,6 +100,8 @@ if __name__ == "__main__":
     Mass, Damping, Stiffness = chain([1, 1, 1], [3, 2, 1], [0.2, 0.2, 0.2])
     Results_t, Results_y = solve_system(y_0, t, Mass, Damping, Stiffness, 'RK23', 0.01)
     
-    print(Results_t)
-    print(Results_y)
+    combined_results = np.hstack((Results_y[:, :3], Results_y[:, -3:]))
+    np.set_printoptions(precision=3)
+    print(f"Combined results (6x??): \n{combined_results}")
+    print(f"The timepoints were: \n{Results_t}")
     print(Results_y.shape)
