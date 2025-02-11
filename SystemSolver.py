@@ -53,6 +53,7 @@ def solve_system(
     K: npt.ArrayLike,
     sol_method: str = 'RK45',
     rel_tol: float = None,
+    t_eval: npt.ArrayLike = None
 ) -> tuple[npt.ArrayLike, npt.ArrayLike]:
     """
     Solves the system of differential equations defined by the mass, damping, and stiffness matrices using chain function.
@@ -73,14 +74,17 @@ def solve_system(
         The integration method to use (default is 'RK45').
     rel_tol : float, optional
         The relative tolerance for the solver (default is None).
+    t_eval : array_like, optional
+        The time points at which to store the computed solution (default is None).
 
     Returns
     -------
     tuple of np arrays
         The time points and the solution of the system.
     """
-    # This is a series of if-else statements to handle unspecified sol_method and rel_tol.
-    if sol_method and rel_tol is None:
+    if t_eval is not None:
+        Ivp_Results = solve_ivp(equation_of_motions, t_duration, y_ic, method=sol_method, rtol=rel_tol, t_eval=t_eval, args=(M, C, K))
+    elif sol_method and rel_tol is None:
         Ivp_Results = solve_ivp(equation_of_motions, t_duration, y_ic, method=sol_method, args=(M, C, K))
     elif rel_tol is None:
         Ivp_Results = solve_ivp(equation_of_motions, t_duration, y_ic, method=sol_method, args=(M, C, K))
@@ -97,8 +101,9 @@ def solve_system(
 if __name__ == "__main__":
     y_0 = np.array([0, 0, 1, 0, 0, 0])
     t = (0, 10)
+    t_points = np.linspace(*t, 1000)
     Mass, Damping, Stiffness = chain([1, 1, 1], [3, 2, 1], [0.2, 0.2, 0.2])
-    Results_t, Results_y = solve_system(y_0, t, Mass, Damping, Stiffness, 'RK23', 0.01)
+    Results_t, Results_y = solve_system(y_0, t, Mass, Damping, Stiffness, 'RK23', 0.01, t_points)
     
     combined_results = np.hstack((Results_y[:, :3], Results_y[:, -3:]))
     np.set_printoptions(precision=3)

@@ -41,10 +41,10 @@ def plot_system(
         plt.figure()
         if plot_position:
             for i in range(pos.shape[0]):
-                plt.plot(t, pos[i], label=f'Position {i+1}')
+                plt.plot(t, pos[i], label=f'Position {i+1}', marker='x')
         if plot_velocity:
             for i in range(vel.shape[0]):
-                plt.plot(t, vel[i], label=f'Velocity {i+1}', linestyle='--')
+                plt.plot(t, vel[i], label=f'Velocity {i+1}', linestyle='--', marker='o')
         plt.xlabel('Time (s)')
         plt.ylabel('Position (m) and Velocity (m/s)')
         plt.title('Position and Velocity of the system over time')
@@ -55,7 +55,7 @@ def plot_system(
         fig, axs = plt.subplots(2, 1, figsize=(10, 8))
         if plot_position:
             for i in range(pos.shape[0]):
-                axs[0].plot(t, pos[i], label=f'Position of element {i+1}')
+                axs[0].plot(t, pos[i], label=f'Position of element {i+1}', marker='x')
             axs[0].set_xlabel('Time (s)')
             axs[0].set_ylabel('Position (m)')
             axs[0].set_title('Position of the system over time')
@@ -63,7 +63,7 @@ def plot_system(
             axs[0].grid()
         if plot_velocity:
             for i in range(vel.shape[0]):
-                axs[1].plot(t, vel[i], label=f'Velocity of element {i+1}')
+                axs[1].plot(t, vel[i], label=f'Velocity of element {i+1}', marker='o')
             axs[1].set_xlabel('Time (s)')
             axs[1].set_ylabel('Velocity (m/s)')
             axs[1].set_title('Velocity of the system over time')
@@ -75,13 +75,9 @@ def plot_system(
 # Example
 if __name__ == '__main__':
     y_0 = np.array([0, 0, 0.1, 0.1, 0, 0,])    
-    t = (0, 10)
-    Mass, Damping, Stiffness = chain([1, 1, 1,], [3, 2, 1], [0.2, 0.2, 0.2])
-    Results_t, Results_y = solve_system(y_0, t, Mass, Damping, Stiffness, 'RK45', 1e-4)
+    t = (0, 100)
+    t_points = np.linspace(*t, 1000)
+    Mass, Damping, Stiffness = chain([1, 1, 1,], [3, 2, 0.01], [0.2, 0.2, 0.2])
+    Results_t, Results_y = solve_system(y_0, t, Mass, Damping, Stiffness, 'Radau', 1e-4, t_points)
     # Plot the system
-    plot_system(Results_t, Results_y, plot_position=True, plot_velocity=True, combined=True)
-    
-    # Expected output: Two plots showing the position and velocity of the system over time.
-    # The position plot should show a sinusoidal curve, and the velocity plot should show a cosine curve. 
-    # Both plots should be periodic and have a frequency of 1 Hz.
-    # The plots should be displayed in two separate windows.
+    plot_system(Results_t, Results_y, plot_position=True, plot_velocity=True, combined=False)
