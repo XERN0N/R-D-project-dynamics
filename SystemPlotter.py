@@ -2,7 +2,8 @@ import numpy as np
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 from SystemModels import chain
-from SystemSolver import solve_system
+from SystemSolver import *
+from scipy.fft import fft, fftfreq
 
 def plot_system(
     t: npt.ArrayLike,
@@ -72,12 +73,57 @@ def plot_system(
         plt.tight_layout()
         plt.show()
 
+def plot_fft(
+    t: npt.ArrayLike,
+    y: npt.ArrayLike
+) -> None:
+    """
+    Plots the FFT of the system's position and velocity over time.
+
+    Parameters
+    ----------
+    t : array_like with shape (n,) (1D-vector)
+        The time points of the system.
+    y : array_like with shape (n, m) (2D-vector)
+        The position and velocity of the system.
+    
+    Returns
+    -------
+    None
+    """
+    N = len(t)
+    T = t[1] - t[0]  # Assuming uniform sampling
+    yf = fft(y, axis=1)
+    xf = fftfreq(N, T)[:N//2]
+
+    plt.figure()
+    for i in range(y.shape[0]):
+        plt.plot(xf, 2.0/N * np.abs(yf[i, :N//2]), label=f'Component {i+1}')
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('Amplitude')
+    plt.title('FFT of the system')
+    plt.legend()
+    plt.grid()
+    plt.show()
+
 # Example
 if __name__ == '__main__':
-    y_0 = np.array([0, 0, 0.1, 0.1, 0, 0,])    
-    t = (0, 100)
-    t_points = np.linspace(*t, 1000)
-    Mass, Damping, Stiffness = chain([1, 1, 1,], [3, 2, 0.01], [0.2, 0.2, 0.2])
-    Results_t, Results_y = solve_system(y_0, t, Mass, Damping, Stiffness, 'Radau', 1e-4, t_points)
-    # Plot the system
+    y_0 = np.array([0, 0, 0, 0, 0, 0])
+    t = (0, 50)
+    t_points = np.linspace(*t, 2048)
+    Mass, Damping, Stiffness = chain([1, 1, 1], [1, 1, 1], [100, 100, 100])
+    load = lambda t: np.array([np.sin(t*1)*1, np.sin(t*1)*-1]) 
+    load_map = np.array([[0, 0, 1], [0, 1, 0]]).T
+    Results = solve_ivp(
+        fun=equation_of_motions, 
+        t_span=t, 
+        y0=y_0, 
+        args=(Mass, Damping, Stiffness, load_map, load),
+        t_eval=t_points
+    )
+    Results_y = Results.y[:3, 20:]
+    Results_t = Results.t[20:]
+
+    plot_fft(Results_t, Results_y)  # Plot FFT for all components
+
     plot_system(Results_t, Results_y, plot_position=True, plot_velocity=True, combined=False)
