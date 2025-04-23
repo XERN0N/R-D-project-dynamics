@@ -2,8 +2,10 @@ import numpy as np
 import numpy.typing as npt
 from typing import Callable
 import igraph as ig
-from collections.abc import Collection
-from scipy.linalg import block_diag
+from collections.abc import Collection, Generator
+from scipy.linalg import block_diag, eig
+from warnings import deprecated
+from contextlib import contextmanager
 
 class Beam_Lattice:
     """
@@ -44,7 +46,7 @@ class Beam_Lattice:
         self.graph = ig.Graph()
 
     def add_beam_edge(self, number_of_elements: int, E_modulus: npt.ArrayLike, shear_modulus: npt.ArrayLike, primary_moment_of_area: npt.ArrayLike, 
-                      secondary_moment_of_area: npt.ArrayLike, polar_mass_moment_of_inertia: npt.ArrayLike, density: npt.ArrayLike, 
+                      secondary_moment_of_area: npt.ArrayLike, torsional_constant: npt.ArrayLike, density: npt.ArrayLike, 
                       cross_sectional_area: npt.ArrayLike, vertex_IDs: Collection[int, int] | int | None = None, coordinates: npt.ArrayLike | None = None, 
                       edge_polar_rotation: float | None = None) -> None:
         """
@@ -68,8 +70,8 @@ class Beam_Lattice:
             The secondary moment of area(s) for the beam (around the y-axis) with shape (n,). If the size of n is number_of_elements then the 
             values in the array corresponds to the value for each element of the beam. If n is a scaler all beam elements will have the same 
             value, and if n has two values, a linear spacing between the two values are used.
-        polar_mass_moment_of_inertia : array_like
-            The polar mass moment of inertia(s) for the beam (around the x-axis) with shape (n,). If the size of n is number_of_elements then the 
+        torsional_constant : array_like
+            The torsional constant for the beam (around the x-axis) with shape (n,). If the size of n is number_of_elements then the 
             values in the array corresponds to the value for each element of the beam. If n is a scaler all beam elements will have the same 
             value, and if n has two values, a linear spacing between the two values are used.
         density : array_like
@@ -97,8 +99,8 @@ class Beam_Lattice:
 
         # Creates the start and end vertices based on the given combination of 'vertex_IDs' and 'coordinates'.
         if isinstance(vertex_IDs, Collection):
-            if len(vertex_IDs) != 3:
-                raise ValueError(f"'vertex_IDs' expected 3 values when given as a collection.")
+            if len(vertex_IDs) != 2:
+                raise ValueError(f"'vertex_IDs' expected 2 values when given as a collection.")
             start_vertex = self.graph.vs[min(vertex_IDs)]
             end_vertex = self.graph.vs[max(vertex_IDs)]
         elif isinstance(vertex_IDs, int):
@@ -118,7 +120,7 @@ class Beam_Lattice:
 
         # Determines the beam properties for each beam element.
         beam_properties = list(np.atleast_1d(E_modulus, shear_modulus, primary_moment_of_area, secondary_moment_of_area, 
-                                             polar_mass_moment_of_inertia, density, cross_sectional_area))
+                                             torsional_constant, density, cross_sectional_area))
         for i, beam_property in enumerate(beam_properties):
             if len(beam_property) == 1:
                 beam_properties[i] = np.full(number_of_elements, beam_property[0])
@@ -126,7 +128,7 @@ class Beam_Lattice:
                 beam_properties[i] = np.linspace(beam_property[0], beam_property[1], number_of_elements)
             elif len(beam_property) > 2 and len(beam_property) != number_of_elements:
                 raise ValueError(f"One of the material property vectors have {len(beam_property)} elements but expected either 1, 2 or {number_of_elements} elements.")
-        E_modulus, shear_modulus, primary_moment_of_area, secondary_moment_of_area, polar_mass_moment_of_inertia, density, cross_sectional_area = beam_properties
+        E_modulus, shear_modulus, primary_moment_of_area, secondary_moment_of_area, torsional_constant, density, cross_sectional_area = beam_properties
 
         # Determines the coordinates for the element vectors.
         edge_vector = end_vertex['coordinates'] - start_vertex['coordinates']
@@ -140,8 +142,8 @@ class Beam_Lattice:
         # Loops over all beam elements.
         for i in range(number_of_elements):
             # Short handing the beam properties.
-            E, G, I_z, I_y, I0, RHO, A = E_modulus[i], shear_modulus[i], primary_moment_of_area[i], secondary_moment_of_area[i], polar_mass_moment_of_inertia[i], density[i], cross_sectional_area[i]
-            J = I_y + I_z
+            E, G, I_z, I_y, J, RHO, A = E_modulus[i], shear_modulus[i], primary_moment_of_area[i], secondary_moment_of_area[i], torsional_constant[i], density[i], cross_sectional_area[i]
+            I0 = I_y + I_z
             L = np.linalg.norm(edge_vector) / number_of_elements
             # Determines the mass matrix per beam element.
             element_mass_matrix = np.array([[140,     0,     0,         0,       0,       0,  70,     0,     0,        0,       0,       0],
@@ -240,27 +242,29 @@ class Beam_Lattice:
         """
         return 6*(np.sum(self.graph.es['number_of_elements'], dtype=int) + self.graph.vcount() - self.graph.ecount())
 
-    def get_system_level_matrices(self) -> tuple[npt.NDArray, npt.NDArray]:
+    def get_system_level_matrices(self, include_fixed_vertices: bool = False) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
-        Calculates the system-level mass- and stiffness matrices by combining all edge mass- and stiffness matrices.
+        Calculates the system-level mass-, stiffness and damping matrices by combining all edge matrices.
         
         Parameters
         ----------
-        fixed_vertex_IDs : tuple of int
-            The vertex IDs that will have a fixed boundary condition.
+        include_fixed_vertices : bool, optional
+            Whether or not to include the fixed vertices in the matrices. False by default.
 
         Returns
         -------
         tuple of two numpy arrays
-            The first element  is the system-level mass matrix and the second is the stiffness matrix. The order of the 
-            rows in each matrix is first vertices followed by the nodes. The vertices are by them selves orded by their
-            respective ID. The nodes are firstly ordered by their respective edge ID and secondly by the direction of the edge.
+            The first element  is the system-level mass matrix, the second is the stiffness matrix and the third is the damping
+            matrix. The order of the rows in each matrix is first vertices followed by the nodes. The vertices are by them selves 
+            orded by their respective ID. The nodes are firstly ordered by their respective edge ID and secondly by the direction 
+            of the edge.
         """
         # Calculates the number of DOF in the entire system.
         system_DOF = self.system_DOF
         # Initializes the system level mass and stiffness matrices.
         system_mass_matrix = np.zeros((system_DOF, system_DOF))
         system_stiffness_matrix = system_mass_matrix.copy()
+        system_damping_matrix = system_mass_matrix.copy()
         # Initializes the column index for the first edge in the edge pickoff operator.
         accumulative_edge_DOF = 6*self.graph.vcount()
         # Loops over all edges to add each edge contribution to the system level matrices.
@@ -282,7 +286,7 @@ class Beam_Lattice:
             accumulative_edge_DOF += edge_DOF
 
         # Applies boundary conditions if present.
-        if np.any(self.graph.vs['fixed']):
+        if not include_fixed_vertices:
             fixed_DOFs = self.fixed_DOFs
             system_mass_matrix = np.delete(system_mass_matrix, fixed_DOFs, axis=0)
             system_mass_matrix = np.delete(system_mass_matrix, fixed_DOFs, axis=1)
@@ -290,8 +294,39 @@ class Beam_Lattice:
             system_stiffness_matrix = np.delete(system_stiffness_matrix, fixed_DOFs, axis=1)
 
         # Damping ready stuff here.
+        eigvals, eigvecs = eig(system_stiffness_matrix, system_mass_matrix)
+        # Modal mass matrix.
+        modal_mass_matrix = eigvecs.T @ system_mass_matrix @ eigvecs
+        #norm_eigvecs = eigvecs @ np.diag(1/np.sqrt(np.diag(Mt)))
+        damping_ratio = 0.05
+        # Modal damping matrix.
+        modal_damping_matrix = np.eye(len(eigvals)) * (2 * damping_ratio * np.sqrt(np.abs(eigvals)) * modal_mass_matrix)
+        # Damping matrix 
+        system_damping_matrix = eigvecs @ modal_damping_matrix @ eigvecs.T   
+        
+        return system_mass_matrix, system_stiffness_matrix, system_damping_matrix
+    
+    def get_eigen_freq(self):
+        """
+        Calculates the eigen frequencies of the system.
 
-        return system_mass_matrix, system_stiffness_matrix
+        Returns
+        -------
+        numpy array
+            Sorted eigen frequencies of the system with shape (n,) where n is the number of eigen frequencies.
+            The eigen frequencies are sorted in ascending order, and converted to Hz.
+        """ 
+        # Gets the system level matrices.
+        mass_matrix, stiffness_matrix, _= self.get_system_level_matrices()
+        # Calculates the eigenvalues and eigenvectors.
+        eigvals, _ = eig(stiffness_matrix, mass_matrix)
+        # Calculates the eigen frequencies.
+        eigen_freq = np.sqrt(np.abs(eigvals)) / (2*np.pi)
+        # Sorts the eigen frequencies and eigenvectors.
+        sort_indices = np.argsort(eigen_freq)
+        eigen_freq = eigen_freq[sort_indices]
+
+        return eigen_freq
 
     def fix_vertices(self, fixed_vertex_IDs: Collection[int]) -> None:
         """
@@ -299,7 +334,7 @@ class Beam_Lattice:
 
         Parameters
         ----------
-        fixed_vertex_IDs : int
+        fixed_vertex_IDs : Collection of int
             The ID of the vertices to be fixed.
         """
         for fixed_vertex_ID in fixed_vertex_IDs:
@@ -309,13 +344,45 @@ class Beam_Lattice:
             else:
                 raise ValueError(f"Vertex ID '{fixed_vertex_ID}' have a force applied to it and can therefore not be fixed.")
 
-    def add_forces(self, forces: dict[int, Callable[[float], float]]) -> None:
+    def free_vertices(self, vertex_IDs: Collection[int] | None = None) -> None:
+        """
+        Frees fixed vertices.
+
+        Parameters
+        ----------
+        vertex_IDs : Collection of int, optional
+            The vertex IDs that should be freed. If it is already free it will be ignored.
+            If not specified all vertices are freed.
+        """
+        if vertex_IDs is None:
+                # If no vertices are specifed, frees all vertices.
+                self.graph.vs['fixed'] = False
+        else:
+            for vertex_ID in vertex_IDs:
+                # Frees the given vertices (if given).
+                self.graph.vs[vertex_ID]['fixed'] = False
+
+    @contextmanager
+    def fixed_vertices(self, fixed_vertex_IDs: Collection[int]) -> Generator[None, None, None]:
+        """
+        Context manager for fixed vertices which are freed afterwards.
+
+        Parameters
+        ----------
+        fixed_vertex_IDs : Collection of int
+            The ID of the vertices to be temporarely fixed.
+        """
+        self.fix_vertices(fixed_vertex_IDs)
+        yield
+        self.free_vertices(fixed_vertex_IDs)
+
+    def add_forces(self, forces: dict[int, Callable[[float], Collection[int]]]) -> None:
         """
         Adds force(s) to the system.
 
         Parameters
         ----------
-        forces : dict[int, Callable[[float], float]]
+        forces : dict[int, Callable[[float], Collection[int]]]
             The force(s) applied to the vertices with vertex ID as the key and a callable as the value with time as input 
             and the force as output with shape (6,).
         """
@@ -325,11 +392,71 @@ class Beam_Lattice:
                 raise ValueError(f"Vertex ID '{vertex_ID}' is fixed and can therefore not have a force applied to it.")
             else:
                 vertex_with_applied_force['force'] = force
+    
+    def remove_forces(self, vertex_IDs: Collection[int] | None = None) -> None:
+            """
+            Removes forces from vertices.
 
-    def get_static_vertex_and_node_displacements(self) -> npt.NDArray:
+            Parameters
+            ----------
+            vertex_IDs : Collection of int, optional
+                The list of vertex IDs to remove forces from. Vertices which already have no forces are ignored.
+                If not specified, all forces are removed.
+            """
+            if vertex_IDs is None:
+                # If no vertices are specifed, remove all forces.
+                self.graph.vs['force'] = None
+            else:
+                for vertex_ID in vertex_IDs:
+                    # Removes the force from the given vertices (if given).
+                    self.graph.vs[vertex_ID]['force'] = None
+
+    @contextmanager
+    def added_forces(self, forces: dict[int, Callable[[float], Collection[int]]]) -> Generator[None, None, None]:
+        """
+        Context manager for adding forces which are removed afterwards.
+
+        Parameters
+        ----------
+        forces : dict[int, Callable[[float], Collection[int]]]
+            The force(s) temporarely applied to the vertices with vertex ID as the key and a callable as the value with time as input 
+            and the force as output with shape (6,).
+        """
+        self.add_forces(forces)
+        yield
+        self.remove_forces(forces.keys())
+
+    def get_force_vector(self, include_fixed_vertices: bool = False, time: float = 0.0) -> npt.NDArray:
+        """
+        Calculates the force vector based on the given forces applied.
+
+        Parameters
+        ----------
+        include_fixed_vertices : bool, optional
+            Whether or not to include the fixed vertices in the force output vector. False by default.
+        time : float, optional
+            The time parameter for the force functions. 0.0 by default.
+        """
+        # Constructs the force vector.
+        force_vector = np.zeros(self.system_DOF)
+        for vertex in self.graph.vs:
+            if vertex['force'] is not None:
+                force_vector[6*vertex.index:6*vertex.index + 6] = vertex['force'](time)
+        if include_fixed_vertices:
+            return force_vector
+        else:
+            return np.delete(force_vector, self.fixed_DOFs)
+
+    @deprecated("Use Static from SystemSolver insted.")
+    def get_static_vertex_and_node_displacements(self, include_fixed_vertices: bool = False) -> npt.NDArray:
         """
         Gets the displacement for all vertices and nodes under a static load given by the first time step of the force functions. 
         The displaced position is not calculated.
+
+        Parameters
+        ----------
+        include_fixed_vertices : bool, optional
+            Whether or not to include the fixed vertices in the displacement output vector. False by default.
 
         Returns
         -------
@@ -340,28 +467,23 @@ class Beam_Lattice:
             according to the direction of the edge. Each vertex/nodal displacement is then orded by (x, y, z, phi_x, phi_y, phi_z) 
             displacement.
         """
-        # Raises an error if there are no fixed boundaries.
-        fixed_DOFs = self.fixed_DOFs
-
         # Gets the system level stiffness matrix.
-        _, stiffness_matrix = self.get_system_level_matrices()
+        _, stiffness_matrix, _ = self.get_system_level_matrices()
 
         # Constructs the force vector.
-        force_vector = np.zeros(self.system_DOF)
-        for vertex in self.graph.vs:
-            if vertex['force'] is not None:
-                force_vector[6*vertex.index:6*vertex.index + 6] = vertex['force'](0)
-        force_vector = np.delete(force_vector, fixed_DOFs)
+        force_vector = self.get_force_vector()
 
         # Calculates the displacements.
         displacements = np.linalg.inv(stiffness_matrix) @ force_vector
 
         # Inserts the fixed DOF back again.
-        for fixed_DOF in fixed_DOFs:
-            displacements = np.insert(displacements, fixed_DOF, 0.0)
+        if include_fixed_vertices:
+            for fixed_DOF in self.fixed_DOFs:
+                displacements = np.insert(displacements, fixed_DOF, 0.0)
         
         return displacements
 
+    @deprecated("Use SystemSolver insted.")
     def get_displaced_vertices_and_node_position(self) -> list[npt.NDArray]:
         """
         Calculates the displaced position of each vertex and node in the system under a given static load.
@@ -398,6 +520,7 @@ class Beam_Lattice:
             
         return vertex_and_node_displaced_positions
 
+    @deprecated("Use SystemSolver insted.")
     def get_displaced_shape_position(self, resolution_per_element: int = 100) -> list[npt.NDArray]:
         """
         Calculates the shape of each beam element.
@@ -415,7 +538,7 @@ class Beam_Lattice:
             edge. The coordinates are orded along the edge direction.
         """
         # Gets the displacement for all vertices and nodes.
-        vertex_and_node_displacements = self.get_static_vertex_and_node_displacements()
+        vertex_and_node_displacements = self.get_static_vertex_and_node_displacements(include_fixed_vertices=True)
         vertex_displacements, node_displacements = np.split(vertex_and_node_displacements, [6*self.graph.vcount()])
         # Initializes array for the displacements of all vertices and nodes along any edge in the order of the edge direction. 
         # Shape: (number of edges, number of vertex and nodes for the given edge).
@@ -471,38 +594,31 @@ if __name__ == "__main__":
     
     system.add_beam_edge(
         number_of_elements=1, 
-        E_modulus=1e11, 
-        shear_modulus=1e11,
-        primary_moment_of_area=1e-9,
-        secondary_moment_of_area=1e-9,
-        polar_mass_moment_of_inertia=5,
-        density=1, 
-        cross_sectional_area=0.01**2, 
-        coordinates=[[0, 0, 0], [0, 0, 1]],
+        E_modulus=2.1*10**11, 
+        shear_modulus=7.9*10**10,
+        primary_moment_of_area=2.157*10**-8,
+        secondary_moment_of_area=1.113*10**-8,
+        torsional_constant=3.7*10**-8,
+        density=7850, 
+        cross_sectional_area=1.737*10**-4, 
+        coordinates=[[0, 0, 0], [0, 0, 1.7]],
         edge_polar_rotation=0
     )
 
-    system.add_beam_edge(
-        number_of_elements=5, 
-        E_modulus=1e11, 
-        shear_modulus=1e11,
-        primary_moment_of_area=1e-9,
-        secondary_moment_of_area=0.1e-9,
-        polar_mass_moment_of_inertia=5,
-        density=1, 
-        cross_sectional_area=0.01**2, 
-        coordinates=(0, 1, 1),
-        vertex_IDs=1,
-        edge_polar_rotation=np.pi/2
-    )
 
 
-    system.add_forces({2: lambda t: [10, 0, 10, 0, 0, 0]})
+    system.add_forces({1: lambda t: [0, 0, 0, 0, 0, 0]})
     system.fix_vertices((0,))
     displaced_shape_points = system.get_displaced_shape_position()
+    output = system.get_eigen_freq()
     
     for displaced_shape_point in displaced_shape_points:
         ax.plot(displaced_shape_point[:, 0], displaced_shape_point[:, 1], displaced_shape_point[:, 2], linewidth=2.0, linestyle='--')
+    MM, KK,_ = system.get_system_level_matrices()
+    eigvals, eigvecs = eig(KK, MM)
+
+    print(MM,KK)
+    print(output)
 
     ax.axis('equal')
     ax.set_xlabel('x')
