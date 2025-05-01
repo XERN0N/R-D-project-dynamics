@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import Callable
+from typing import Callable, Literal, get_type_hints, get_args
 import igraph as ig
 from collections.abc import Collection, Generator
 from scipy.linalg import block_diag, eig
@@ -446,6 +446,47 @@ class Beam_Lattice:
             return force_vector
         else:
             return np.delete(force_vector, self.fixed_DOFs)
+
+    def get_transfer_matrix(self, kinematic: Literal['receptence', 'mobility', 'accelerance'], complex_frequencies: npt.ArrayLike) -> npt.NDArray:
+        """
+        Gets the full transfer matrix for the entire system.
+
+        Parameters
+        ----------
+        kinematic : Literal['receptence', 'mobility', 'accelerance']
+            The type of transfer function to return.
+        complex_frequencies : array_like
+            The complex frequencies which to evaluate the transfer matrix with shape (k,) where k is the number of complex frequencies.
+
+        Returns
+        -------
+        numpy array
+            The full transfer matrix for each complex frequency with shape (k, 2n, n) where n is the DOF in the system.
+        """
+        complex_frequencies = np.atleast_1d(complex_frequencies)
+        mass_matrix, stiffness_matrix, damping_matrix = self.get_system_level_matrices()
+        inverted_mass_matrix = np.linalg.inv(mass_matrix)
+        # Equation (5a) - Lecture 12.
+        state_matrix = np.block([[             np.zeros(mass_matrix.shape),               np.eye(len(mass_matrix))], 
+                                 [-inverted_mass_matrix @ stiffness_matrix, -inverted_mass_matrix @ damping_matrix]])
+        # Equation (5b) without B_2 - Lecture 12.
+        input_matrix = np.block([[np.zeros(mass_matrix.shape)], [inverted_mass_matrix]])
+        
+        match kinematic:
+            case 'receptence':
+                output_matrix = np.block([np.eye(len(mass_matrix)), np.zeros(mass_matrix.shape)])
+                transmission_matrix = 0
+            case 'mobility':
+                output_matrix = np.block([np.zeros(mass_matrix.shape), np.eye(len(mass_matrix))])
+                transmission_matrix = 0
+            case 'accelerance':
+                output_matrix = np.block([-inverted_mass_matrix @ stiffness_matrix, inverted_mass_matrix @ damping_matrix])
+                transmission_matrix = inverted_mass_matrix
+            case _:
+                raise ValueError(f"Recieved '{kinematic}' for parameter 'kinematic' but expected either {get_args(get_type_hints(self.get_transfer_matrix)['kinematic'])}.")
+        
+        # Equation 13 - Lecture 12.
+        return output_matrix @ np.linalg.inv(np.tile(np.eye(len(state_matrix)), (len(complex_frequencies), 1, 1)) * np.tile(complex_frequencies, (len(state_matrix), 1, 1)).T - state_matrix) @ input_matrix + transmission_matrix  
 
     @deprecated("Use Static from SystemSolver insted.")
     def get_static_vertex_and_node_displacements(self, include_fixed_vertices: bool = False) -> npt.NDArray:
