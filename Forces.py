@@ -27,8 +27,8 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     force_vertex_IDs = np.argwhere(np.array(model.graph.vs['force']) != None).reshape(-1)
     force_DOFs = IDs_to_DOFs(force_vertex_IDs)
     forces = np.empty((len(timesteps), len(force_DOFs), 1))
-    for time in timesteps:
-        forces[time, :] = model.get_force_vector(time=time)[force_DOFs]
+    for i, time in enumerate(timesteps):
+        forces[i, :] = model.get_force_vector(time=time)[force_DOFs]
 
     # Perform transformation of force vector.
     complex_frequencies, forces_in_laplace = z_transform()
