@@ -25,6 +25,8 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
         Extrapolated response type. Can be either 'cyclic' or 'non-cyclic' where non-cyclic adds zero-padding to the response and 'cyclic'
         repeats the response with a period corresponding to the length of the timesteps.
     """    
+    stationary_vertex_IDs = np.atleast_1d(stationary_vertex_IDs)
+    input_vertex_IDs = np.atleast_1d(input_vertex_IDs)
     IDs_to_DOFs = lambda IDs: np.repeat(IDs - [np.sum(np.nonzero(model.graph.vs['fixed'])) < i for i in IDs], 6) * 6 + np.tile(np.arange(6), len(IDs))
 
     # Get the force vector from the model for all time steps.
@@ -44,34 +46,36 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     stationary_DOFs = IDs_to_DOFs(stationary_vertex_IDs)
     # Gets the transfer matrix and picks the associated transfer functions.
     transfer_matrix_rows = np.tile(np.atleast_2d(stationary_DOFs).T, (len(frequencies), 1, 1))
-    transfer_matrix_columns = np.tile(np.atleast_2d(np.sort(np.concatenate((input_DOFs, force_DOFs)))), (len(frequencies), 1, 1))
+    combined_forces_DOFs = np.sort(np.concatenate((input_DOFs, force_DOFs)))
+    transfer_matrix_columns = np.tile(np.atleast_2d(combined_forces_DOFs), (len(frequencies), 1, 1))
     transfer_function = np.take_along_axis(
                         np.take_along_axis(model.get_transfer_matrix('receptence', frequencies), 
                                                 transfer_matrix_rows,    axis=1), 
                                                 transfer_matrix_columns, axis=2)
+    # Rearanging the transfer matrix such that the last columns relates to the response forces and the first to the forces.
+    boolean_mask_of_columns_related_to_response_forces = np.isin(combined_forces_DOFs, input_DOFs)
+    transfer_function_column_indices = np.arange(len(input_DOFs) + len(force_DOFs))
+    rearanged_column_indices = np.concatenate((transfer_function_column_indices[~boolean_mask_of_columns_related_to_response_forces], 
+                                               transfer_function_column_indices[ boolean_mask_of_columns_related_to_response_forces]))
+    transfer_function = transfer_function[:, :, rearanged_column_indices]
+
     # Isolates the response function in the laplace domain.
     response_in_frequency_domain = np.linalg.pinv(transfer_function[:, :, len(force_DOFs):]) @ (-transfer_function[:, :, :len(force_DOFs)] @ forces_in_frequency_domain)
 
     # Apply inverse z-transform to the response function.
-    responses = np.fft.ifft(forces.reshape(len(timesteps), len(force_DOFs)), axis=0)
-
+    responses = np.fft.ifft(response_in_frequency_domain.reshape(len(timesteps), len(input_DOFs)), axis=0).real
+    
     for i, input_vertex_ID in enumerate(input_vertex_IDs):
-        vertex_response = responses[i*6:i*6+6].T
+        vertex_response = responses.T[i*6:i*6+6]
         match response_shape:
             case 'cyclic':
                 def response_function(time: float) -> npt.NDArray:
                     time = time % timesteps[-1]
-                    force = np.empty(6)
-                    for i, DOF_response in enumerate(vertex_response):
-                        force[i] = np.interp(time, timesteps, DOF_response)
-                    return force
+                    return np.array([np.interp(time, timesteps, DOF_response) for DOF_response in vertex_response])
             case 'non-cyclic':
                 def response_function(time: float) -> npt.NDArray:
                     if time <= timesteps[-1]:
-                        force = np.empty(6)
-                        for i, DOF_response in enumerate(vertex_response):
-                            force[i] = np.interp(time, timesteps, DOF_response)
-                        return force
+                        return np.array([np.interp(time, timesteps, DOF_response) for DOF_response in vertex_response])
                     else:
                         return np.array([0, 0, 0, 0, 0, 0])
                     
