@@ -31,24 +31,25 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
         forces[i, :] = model.get_force_vector(time=time)[force_DOFs]
 
     # Perform transformation of force vector.
-    complex_frequencies, forces_in_laplace = z_transform()
+    forces_in_frequency_domain = np.fft.fft(forces.reshape(len(timesteps), len(force_DOFs)), axis=0).reshape(len(timesteps), len(force_DOFs), 1)
+    frequencies = np.fft.fftfreq(len(timesteps), timesteps[-1]/len(timesteps))
 
     """Solves for the response function in the laplace domain."""
     # Determines which DOF are accociated with the input and stationary vertices.
     input_DOFs = IDs_to_DOFs(input_vertex_IDs)
     stationary_DOFs = IDs_to_DOFs(stationary_vertex_IDs)
     # Gets the transfer matrix and picks the associated transfer functions.
-    transfer_matrix_rows = np.tile(np.atleast_2d(stationary_DOFs).T, (len(complex_frequencies), 1, 1))
-    transfer_matrix_columns = np.tile(np.atleast_2d(np.sort(np.concatenate((input_DOFs, force_DOFs)))), (len(complex_frequencies), 1, 1))
+    transfer_matrix_rows = np.tile(np.atleast_2d(stationary_DOFs).T, (len(frequencies), 1, 1))
+    transfer_matrix_columns = np.tile(np.atleast_2d(np.sort(np.concatenate((input_DOFs, force_DOFs)))), (len(frequencies), 1, 1))
     transfer_function = np.take_along_axis(
-                        np.take_along_axis(model.get_transfer_matrix('receptence', complex_frequencies), 
+                        np.take_along_axis(model.get_transfer_matrix('receptence', frequencies), 
                                                 transfer_matrix_rows,    axis=1), 
                                                 transfer_matrix_columns, axis=2)
     # Isolates the response function in the laplace domain.
-    response_in_laplace = np.linalg.pinv(transfer_function[:, :, len(force_DOFs):]) @ (-transfer_function[:, :, :len(force_DOFs)] @ forces_in_laplace)
+    response_in_frequency_domain = np.linalg.pinv(transfer_function[:, :, len(force_DOFs):]) @ (-transfer_function[:, :, :len(force_DOFs)] @ forces_in_frequency_domain)
 
     # Apply inverse z-transform to the response function.
-    pass
+    responses = np.fft.ifft(forces.reshape(len(timesteps), len(force_DOFs)), axis=0)
 
     # Add the new force to the model.
     for i, response in enumerate(responses.T):
