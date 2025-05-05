@@ -51,4 +51,5 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     pass
 
     # Add the new force to the model.
-    pass
+    for i, response in enumerate(responses.T):
+        model.add_forces({input_vertex_IDs[i]: response})
