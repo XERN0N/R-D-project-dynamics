@@ -1,8 +1,9 @@
 from SystemModels import Beam_Lattice
 import numpy as np
 import numpy.typing as npt
+from typing import Literal
 
-def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike, stationary_vertex_IDs: npt.ArrayLike, input_vertex_IDs: npt.NDArray) -> None:
+def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike, stationary_vertex_IDs: npt.ArrayLike, input_vertex_IDs: npt.NDArray, response_shape: Literal['cyclic', 'non-cyclic'] = 'cyclic') -> None:
     """
     Adds a time dependent force to the model that ensures minimal displacement at given vertices in the model.
     If the system is overdetermined (more outputs than inputs) the input vector which minimizes the L2 norm of
@@ -20,6 +21,9 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
         All the DOF's in the vertex ID(s) will be stationary.
     input_vertex_IDs : array_like
         The vertex ID(s) where the input forces will be applied.
+    response_shape : str
+        Extrapolated response type. Can be either 'cyclic' or 'non-cyclic' where non-cyclic adds zero-padding to the response and 'cyclic'
+        repeats the response with a period corresponding to the length of the timesteps.
     """    
     IDs_to_DOFs = lambda IDs: np.repeat(IDs - [np.sum(np.nonzero(model.graph.vs['fixed'])) < i for i in IDs], 6) * 6 + np.tile(np.arange(6), len(IDs))
 
@@ -28,7 +32,7 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     force_DOFs = IDs_to_DOFs(force_vertex_IDs)
     forces = np.empty((len(timesteps), len(force_DOFs), 1))
     for i, time in enumerate(timesteps):
-        forces[i, :] = model.get_force_vector(time=time)[force_DOFs]
+        forces[i, :] = model.get_force_vector(time=time)[force_DOFs].reshape(-1, 1)
 
     # Perform transformation of force vector.
     forces_in_frequency_domain = np.fft.fft(forces.reshape(len(timesteps), len(force_DOFs)), axis=0).reshape(len(timesteps), len(force_DOFs), 1)
@@ -51,6 +55,24 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     # Apply inverse z-transform to the response function.
     responses = np.fft.ifft(forces.reshape(len(timesteps), len(force_DOFs)), axis=0)
 
-    # Add the new force to the model.
-    for i, response in enumerate(responses.T):
-        model.add_forces({input_vertex_IDs[i]: response})
+    for i, input_vertex_ID in enumerate(input_vertex_IDs):
+        vertex_response = responses[i*6:i*6+6].T
+        match response_shape:
+            case 'cyclic':
+                def response_function(time: float) -> npt.NDArray:
+                    time = time % timesteps[-1]
+                    force = np.empty(6)
+                    for i, DOF_response in enumerate(vertex_response):
+                        force[i] = np.interp(time, timesteps, DOF_response)
+                    return force
+            case 'non-cyclic':
+                def response_function(time: float) -> npt.NDArray:
+                    if time <= timesteps[-1]:
+                        force = np.empty(6)
+                        for i, DOF_response in enumerate(vertex_response):
+                            force[i] = np.interp(time, timesteps, DOF_response)
+                        return force
+                    else:
+                        return np.array([0, 0, 0, 0, 0, 0])
+                    
+        model.add_forces({input_vertex_ID: response_function})
