@@ -488,57 +488,6 @@ class Beam_Lattice:
         # Equation 13 - Lecture 12.
         return output_matrix @ np.linalg.inv(np.tile(np.eye(len(state_matrix)), (len(complex_frequencies), 1, 1)) * np.tile(complex_frequencies, (len(state_matrix), 1, 1)).T - state_matrix) @ input_matrix + transmission_matrix  
 
-    def get_domain_transform(self, end_time: float, time_increment: float, target_domain: str = Literal['frequency', 'time'], forces_in_frequency_domain: npt.ArrayLike = None):
-        """
-        Transform the system's force vector between time and frequency domains.
-
-        This function evaluates the force vector of the system at discrete time points
-        and applies a Fourier transform (FFT) or inverse Fourier transform (IFFT),
-        depending on the target domain specified.
-
-        Parameters
-        ----------
-        end_time : float
-            The final time up to which the force vector is sampled.
-        time_increment : float
-            The time step used to discretize the time vector.
-        target_domain : {'frequency', 'time'}, default='frequency'
-            The domain to which the time-domain force vector should be transformed.
-            If 'frequency', performs FFT; if 'time', performs IFFT.
-        forces_in_frequency_domain : array-like, optional
-            Not used in current implementation. Reserved for future extension.
-
-        Returns
-        -------
-        complex_frequencies : ndarray, shape=(n,), dtype=complex
-            The frequency vector associated with the FFT output. Returned only if 
-            `target_domain` is 'frequency'. Otherwise, may be undefined or zero.
-        forces_in_target_domain : ndarray, shape=(n, dof, 1), dtype=complex
-            The transformed force vector in the requested domain. Output is always 3D
-            to ensure compatibility with downstream processing (e.g., transfer matrix calculation).
-        """
-
-        signal_length = int(end_time / time_increment) + 1
-        time_points = np.linspace(0, end_time, signal_length)
-        force_time_vector = np.zeros((len(time_points), (self.system_DOF - np.size(self.fixed_DOFs))))
-        forces_in_target_domain = np.zeros(force_time_vector.shape, dtype=complex)
-
-        for i, time_point in enumerate(time_points):
-            force_time_vector[i, :] = self.get_force_vector(time=time_point)
-        
-        #FFT
-        if target_domain == 'frequency':
-            forces_in_target_domain = np.fft.fft(force_time_vector, axis=0)
-            complex_frequencies = np.fft.fftfreq(signal_length, time_increment)
-
-        #IFFT
-        elif target_domain == 'time':
-            forces_in_target_domain = np.fft.ifft(force_time_vector, axis=0)
-        #Expand to 3D to comply with use in get_transfer_matrix
-        forces_in_target_domain = np.expand_dims(forces_in_target_domain, axis=2)        
-
-        return complex_frequencies, forces_in_target_domain
-
     @deprecated("Use Static from SystemSolver insted.")
     def get_static_vertex_and_node_displacements(self, include_fixed_vertices: bool = False) -> npt.NDArray:
         """
