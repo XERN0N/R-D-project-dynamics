@@ -520,11 +520,11 @@ class Beam_Lattice:
 
         signal_length = int(end_time / time_increment) + 1
         time_points = np.linspace(0, end_time, signal_length)
-        force_time_vector = np.zeros((len(time_points), (self.system_DOF - np.size(self.fixed_DOFs))), dtype=complex)
+        force_time_vector = np.zeros((len(time_points), (self.system_DOF - np.size(self.fixed_DOFs))))
         forces_in_target_domain = np.zeros(force_time_vector.shape, dtype=complex)
 
         for i, time_point in enumerate(time_points):
-            force_time_vector[i, :] = np.asarray(self.get_force_vector(time=time_point), dtype=complex)
+            force_time_vector[i, :] = self.get_force_vector(time=time_point)
         
         #FFT
         if target_domain == 'frequency':
