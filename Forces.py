@@ -1,9 +1,44 @@
 from SystemModels import Beam_Lattice
 import numpy as np
 import numpy.typing as npt
-from typing import Literal
+from typing import Literal, Callable
 
-def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike, stationary_vertex_IDs: npt.ArrayLike, input_vertex_IDs: npt.NDArray, response_shape: Literal['cyclic', 'non-cyclic'] = 'cyclic') -> None:
+def continous_force_from_array(forces: npt.ArrayLike, timesteps: npt.ArrayLike, cyclic: bool = True) -> Callable[[float], npt.NDArray]:
+    """
+    Creates a continous force from an array of forces by linearely interpolation.
+
+    Parameters
+    ----------
+    forces : array_like
+        The forces with shape (6, t) where t is the number of timesteps.
+    timesteps : array_like
+        The timesteps with shape (t,) corresponding to the forces in the array.
+    cyclic : bool, optional
+        Whether the force should be cyclic after the last timestep. If false, the function returns a zero-force
+        after the last timestep.
+        
+    Returns
+    -------
+    Callable[[float], npt.NDArray]
+        The continous function that takes time as input and returns the interpolated force.
+    """
+    forces = np.atleast_2d(forces)
+    timesteps = np.atleast_1d(timesteps)
+    
+    if cyclic:
+        def continous_force(time: float) -> npt.NDArray:
+            time = time % timesteps[-1]
+            return np.array([np.interp(time, timesteps, DOF) for DOF in forces])
+    else:
+        def continous_force(time: float) -> npt.NDArray:
+            if time <= timesteps[-1]:
+                return np.array([np.interp(time, timesteps, DOF) for DOF in forces])
+            else:
+                return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    
+    return continous_force
+
+def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike, stationary_vertex_IDs: npt.ArrayLike, input_vertex_IDs: npt.NDArray, cyclic: bool = True) -> None:
     """
     Adds a time dependent force to the model that ensures minimal displacement at given vertices in the model.
     If the system is overdetermined (more outputs than inputs) the input vector which minimizes the L2 norm of
@@ -21,9 +56,9 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
         All the DOF's in the vertex ID(s) will be stationary.
     input_vertex_IDs : array_like
         The vertex ID(s) where the input forces will be applied.
-    response_shape : str
-        Extrapolated response type. Can be either 'cyclic' or 'non-cyclic' where non-cyclic adds zero-padding to the response and 'cyclic'
-        repeats the response with a period corresponding to the length of the timesteps.
+    cyclic : bool
+        Whether the force should be cyclic after the last timestep. If false, the function returns a zero-force
+        after the last timestep.
     """    
     stationary_vertex_IDs = np.atleast_1d(stationary_vertex_IDs)
     input_vertex_IDs = np.atleast_1d(input_vertex_IDs)
@@ -65,18 +100,8 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     # Apply inverse z-transform to the response function.
     responses = np.fft.ifft(response_in_frequency_domain.reshape(len(timesteps), len(input_DOFs)), axis=0).real
     
+    # Adds the response functions to the model.
     for i, input_vertex_ID in enumerate(input_vertex_IDs):
         vertex_response = responses.T[i*6:i*6+6]
-        match response_shape:
-            case 'cyclic':
-                def response_function(time: float) -> npt.NDArray:
-                    time = time % timesteps[-1]
-                    return np.array([np.interp(time, timesteps, DOF_response) for DOF_response in vertex_response])
-            case 'non-cyclic':
-                def response_function(time: float) -> npt.NDArray:
-                    if time <= timesteps[-1]:
-                        return np.array([np.interp(time, timesteps, DOF_response) for DOF_response in vertex_response])
-                    else:
-                        return np.array([0, 0, 0, 0, 0, 0])
-                    
+        response_function = continous_force_from_array(vertex_response, timesteps, cyclic)
         model.add_forces({input_vertex_ID: response_function})
