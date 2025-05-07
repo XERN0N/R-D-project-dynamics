@@ -44,10 +44,28 @@ class Beam_Lattice:
     """
     def __init__(self) -> None:
         self.graph = ig.Graph()
+        self.default_beam_properties = {
+            "E_modulus": 2.1e11,
+            "shear_modulus": 7.9e10,
+            "primary_moment_of_area": 2.157e-8,
+            "secondary_moment_of_area": 1.113e-8,
+            "torsional_constant": 3.7e-8,
+            "density": 7850,
+            "cross_sectional_area": 1.737e-4,
+        }
 
-    def add_beam_edge(self, number_of_elements: int, E_modulus: npt.ArrayLike, shear_modulus: npt.ArrayLike, primary_moment_of_area: npt.ArrayLike, 
-                      secondary_moment_of_area: npt.ArrayLike, torsional_constant: npt.ArrayLike, density: npt.ArrayLike, 
-                      cross_sectional_area: npt.ArrayLike, vertex_IDs: Collection[int, int] | int | None = None, coordinates: npt.ArrayLike | None = None, 
+    def set_default_beam_properties(self, **kwargs):
+        for key, value in kwargs.items():
+            if key not in self.default_beam_properties:
+                raise KeyError(f"{key} does not exist in default beam properties")
+            else:
+                self.default_beam_properties[key] = value
+
+    def add_beam_edge(self, number_of_elements: int, E_modulus: npt.ArrayLike | None = None, shear_modulus: npt.ArrayLike | None = None,
+                      primary_moment_of_area: npt.ArrayLike | None = None, secondary_moment_of_area: npt.ArrayLike | None = None,
+                      torsional_constant: npt.ArrayLike | None = None, density: npt.ArrayLike | None = None, 
+                      cross_sectional_area: npt.ArrayLike | None = None,
+                      vertex_IDs: Collection[int, int] | int | None = None, coordinates: npt.ArrayLike | None = None, 
                       edge_polar_rotation: float | None = None) -> None:
         """
         Adds an edge to the graph containing a straight set of beam elements or just a single beam elemet.
@@ -91,6 +109,22 @@ class Beam_Lattice:
             Rotation of the beam along the beam axis [rad]. The order of rotation is polar-primary-secondary (x-z-y) so this is the first
             rotation applied to the beam. Default 0.
         """
+        #Get default values from constructor
+        if E_modulus is None:                
+            E_modulus = self.default_beam_properties["E_modulus"]
+        if shear_modulus is None:            
+            shear_modulus = self.default_beam_properties["shear_modulus"]
+        if primary_moment_of_area is None:   
+            primary_moment_of_area = self.default_beam_properties["primary_moment_of_area"]
+        if secondary_moment_of_area is None: 
+            secondary_moment_of_area = self.default_beam_properties["secondary_moment_of_area"]
+        if torsional_constant is None:       
+            torsional_constant = self.default_beam_properties["torsional_constant"]
+        if density is None:                  
+            density = self.default_beam_properties["density"]
+        if cross_sectional_area is None:     
+            cross_sectional_area = self.default_beam_properties["cross_sectional_area"]
+
         # Additional parameters for the vertices.
         additional_vertex_parameters = {
             'fixed': False, 
@@ -119,8 +153,7 @@ class Beam_Lattice:
                 raise ValueError(f"'Coordinates' have shape {coordinates.shape} but expected shape (2, 3) when not specifying 'vertex_IDs'")
 
         # Determines the beam properties for each beam element.
-        beam_properties = list(np.atleast_1d(E_modulus, shear_modulus, primary_moment_of_area, secondary_moment_of_area, 
-                                             torsional_constant, density, cross_sectional_area))
+        beam_properties = list(np.atleast_1d(E_modulus, shear_modulus, primary_moment_of_area, secondary_moment_of_area, torsional_constant, density, cross_sectional_area))
         for i, beam_property in enumerate(beam_properties):
             if len(beam_property) == 1:
                 beam_properties[i] = np.full(number_of_elements, beam_property[0])

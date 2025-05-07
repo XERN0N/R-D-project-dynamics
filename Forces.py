@@ -2,6 +2,7 @@ from SystemModels import Beam_Lattice
 import numpy as np
 import numpy.typing as npt
 from typing import Literal, Callable
+from scipy.interpolate import interp1d 
 
 def continous_force_from_array(forces: npt.ArrayLike, timesteps: npt.ArrayLike, cyclic: bool = True) -> Callable[[float], npt.NDArray]:
     """
@@ -24,15 +25,16 @@ def continous_force_from_array(forces: npt.ArrayLike, timesteps: npt.ArrayLike, 
     """
     forces = np.atleast_2d(forces)
     timesteps = np.atleast_1d(timesteps)
-    
+    force_interpolation = interp1d(timesteps, forces, axis=1, kind='cubic')
+
     if cyclic:
         def continous_force(time: float) -> npt.NDArray:
             time = time % timesteps[-1]
-            return np.array([np.interp(time, timesteps, DOF) for DOF in forces])
+            return np.array(force_interpolation(time))
     else:
         def continous_force(time: float) -> npt.NDArray:
             if time <= timesteps[-1]:
-                return np.array([np.interp(time, timesteps, DOF) for DOF in forces])
+                return np.array(force_interpolation(time))
             else:
                 return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     
