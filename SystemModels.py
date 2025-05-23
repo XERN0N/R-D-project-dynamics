@@ -226,6 +226,10 @@ class Beam_Lattice:
         # Adds the beam into the graph.
         self.graph.add_edge(start_vertex, end_vertex, **edge_parameters)
 
+    def add_beam_edges()
+        #TODO
+
+
     @property
     def fixed_DOFs(self) -> npt.NDArray:
         """
