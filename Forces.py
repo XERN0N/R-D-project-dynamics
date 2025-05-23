@@ -71,6 +71,10 @@ def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike
     for i, time in enumerate(timesteps):
         forces[i, :] = model.get_force_vector(time=time)[force_DOFs].reshape(-1, 1)
 
+    
+
+
+
     # Perform transformation of force vector.
     forces_in_frequency_domain = np.fft.fft(forces.reshape(len(timesteps), len(force_DOFs)), axis=0).reshape(len(timesteps), len(force_DOFs), 1)
     frequencies = np.fft.fftfreq(len(timesteps), timesteps[-1]/len(timesteps))
