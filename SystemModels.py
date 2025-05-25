@@ -258,7 +258,7 @@ class Beam_Lattice:
             If the extra adjacency matrix contains vertex ID's that doesn't exist.
         """
         coordinates = np.atleast_2d(coordinates)
-        inter_adjacency_matrix = np.unique(np.sort(np.atleast_2d(inter_adjacency_matrix)), axis=0)
+        inter_adjacency_matrix = np.unique(np.atleast_2d(inter_adjacency_matrix), axis=0)
         if not np.issubdtype(inter_adjacency_matrix.dtype, np.integer):
             raise TypeError(f"Inter adjecency matrix expected integers but recieved '{inter_adjacency_matrix.dtype}'.")
         if np.count_nonzero(inter_adjacency_matrix[:, 0] - inter_adjacency_matrix[:, 1]) != len(inter_adjacency_matrix):
