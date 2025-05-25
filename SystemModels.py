@@ -6,6 +6,7 @@ from collections.abc import Collection, Generator
 from scipy.linalg import block_diag, eig
 from warnings import deprecated
 from contextlib import contextmanager
+from Beams import MaterialProperties
 
 class Beam_Lattice:
     """
@@ -103,7 +104,7 @@ class Beam_Lattice:
                 raise ValueError(f"'vertex_IDs' expected 2 values when given as a collection.")
             start_vertex = self.graph.vs[min(vertex_IDs)]
             end_vertex = self.graph.vs[max(vertex_IDs)]
-        elif isinstance(vertex_IDs, int):
+        elif isinstance(vertex_IDs, np.integer):
             coordinates = np.asarray(coordinates)
             if coordinates.shape == (3,):
                 end_vertex = self.graph.add_vertex(coordinates=coordinates, **additional_vertex_parameters)
@@ -226,8 +227,63 @@ class Beam_Lattice:
         # Adds the beam into the graph.
         self.graph.add_edge(start_vertex, end_vertex, **edge_parameters)
 
-    def add_beam_edges()
-        #TODO
+    def add_beam_edges(self, coordinates: npt.ArrayLike, adjacency_matrix: npt.ArrayLike, material_properties: MaterialProperties, **additional_kwargs) -> None:
+        """
+        Adds n beam edges with identical properties given m connections.
+
+        Parameters
+        ----------
+        coordinates : array_like
+            The coordinates of the vertices of the edges with shape (n, 3). Any vertices added which are not mentioned in the adjacency matrix will be
+            ignored.
+        adjacency_matrix : array_like
+            An adjacency matrix of int with shape (m, 2) giving the connectivity of the beams being added by specifying which indices in 'coordinates' should
+            be connected. Dublicate pairs are ignored.
+        material_properties : MaterialProperties
+            The material properties of all the added beams.
+        **additional_kwargs
+            Additional parameters for the beam (see add_beam_edge).
+
+        Raises
+        ------
+        ValueError
+            If the adjacency matrix contains indices that are greater than the length of the coordinates matrix.
+        ValueError
+            If the adjacency matrix contatins a pair of indices that connect to itself.
+        """
+        coordinates = np.atleast_2d(coordinates)
+        adjacency_matrix = np.unique(np.sort(np.atleast_2d(adjacency_matrix)), axis=0)
+        if not np.issubdtype(adjacency_matrix.dtype, np.integer):
+            raise TypeError(f"Adjecency expected integers but recieved '{adjacency_matrix.dtype}'.")
+        if np.count_nonzero(adjacency_matrix[:, 0] - adjacency_matrix[:, 1]) != len(adjacency_matrix):
+            raise ValueError(f"A pair in the adjacency matrix connects to itself.")
+        if np.any(adjacency_matrix > len(coordinates) - 1):
+            raise ValueError(f"The indice(s) {np.unique(adjacency_matrix[adjacency_matrix > len(coordinates) - 1])} doesn't exist in 'coordinates'.")
+
+        vertex_count = len(self.graph.vs)
+
+        for i, (start_coordinates_index, end_coordinates_index) in enumerate(adjacency_matrix):
+            coordinates_to_add = None
+            vertex_IDs_to_connect = None
+            # If start vertex hasn't already been added.
+            if start_coordinates_index not in adjacency_matrix[:i]:
+                coordinates_to_add = coordinates[start_coordinates_index]
+            else:
+                vertex_IDs_to_connect = start_coordinates_index + vertex_count
+
+            # If end vertex hasn't already been added.
+            if end_coordinates_index not in adjacency_matrix[:i]:
+                if coordinates_to_add is not None:
+                    coordinates_to_add = np.stack((coordinates_to_add, coordinates[end_coordinates_index]))
+                else:
+                    coordinates_to_add = coordinates[end_coordinates_index]
+            else:
+                if vertex_IDs_to_connect is not None:
+                    vertex_IDs_to_connect = (vertex_IDs_to_connect, end_coordinates_index + vertex_count)
+                else:
+                    vertex_IDs_to_connect = end_coordinates_index + vertex_count
+            
+            self.add_beam_edge(vertex_IDs=vertex_IDs_to_connect, coordinates=coordinates_to_add, **material_properties, **additional_kwargs)
 
 
     @property
