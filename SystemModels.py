@@ -104,7 +104,7 @@ class Beam_Lattice:
                 raise ValueError(f"'vertex_IDs' expected 2 values when given as a collection.")
             start_vertex = self.graph.vs[min(vertex_IDs)]
             end_vertex = self.graph.vs[max(vertex_IDs)]
-        elif isinstance(vertex_IDs, np.integer):
+        elif np.issubdtype(type(vertex_IDs), np.integer):
             coordinates = np.asarray(coordinates)
             if coordinates.shape == (3,):
                 end_vertex = self.graph.add_vertex(coordinates=coordinates, **additional_vertex_parameters)
