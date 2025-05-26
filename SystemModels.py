@@ -1,11 +1,12 @@
 import numpy as np
 import numpy.typing as npt
-from typing import Callable
+from typing import Callable, Literal, get_type_hints, get_args
 import igraph as ig
 from collections.abc import Collection, Generator
 from scipy.linalg import block_diag, eig
 from warnings import deprecated
 from contextlib import contextmanager
+from Beams import MaterialProperties
 
 class Beam_Lattice:
     """
@@ -48,7 +49,7 @@ class Beam_Lattice:
     def add_beam_edge(self, number_of_elements: int, E_modulus: npt.ArrayLike, shear_modulus: npt.ArrayLike, primary_moment_of_area: npt.ArrayLike, 
                       secondary_moment_of_area: npt.ArrayLike, torsional_constant: npt.ArrayLike, density: npt.ArrayLike, 
                       cross_sectional_area: npt.ArrayLike, vertex_IDs: Collection[int, int] | int | None = None, coordinates: npt.ArrayLike | None = None, 
-                      edge_polar_rotation: float | None = None) -> None:
+                      edge_polar_rotation: float = 0.0) -> None:
         """
         Adds an edge to the graph containing a straight set of beam elements or just a single beam elemet.
 
@@ -103,7 +104,7 @@ class Beam_Lattice:
                 raise ValueError(f"'vertex_IDs' expected 2 values when given as a collection.")
             start_vertex = self.graph.vs[min(vertex_IDs)]
             end_vertex = self.graph.vs[max(vertex_IDs)]
-        elif isinstance(vertex_IDs, int):
+        elif isinstance(vertex_IDs, np.integer):
             coordinates = np.asarray(coordinates)
             if coordinates.shape == (3,):
                 end_vertex = self.graph.add_vertex(coordinates=coordinates, **additional_vertex_parameters)
@@ -225,6 +226,83 @@ class Beam_Lattice:
 
         # Adds the beam into the graph.
         self.graph.add_edge(start_vertex, end_vertex, **edge_parameters)
+
+    def add_beam_edges(self, coordinates: npt.ArrayLike, inter_adjacency_matrix: npt.ArrayLike, material_properties: MaterialProperties, extra_adjacency_matrix: npt.ArrayLike | None = None, **additional_kwargs) -> None:
+        """
+        Adds n beam edges with identical properties given m inter-connections and p extra-connections.
+
+        Parameters
+        ----------
+        coordinates : array_like
+            The coordinates of the vertices of the edges with shape (n, 3). Any vertices added which are not mentioned in the adjacency matrix will be
+            ignored.
+        inter_adjacency_matrix : array_like
+            An adjacency matrix of int with shape (m, 2) giving the connectivity of the beams being added by specifying which indices in 'coordinates' should
+            be connected. Dublicate pairs are ignored.
+        material_properties : MaterialProperties
+            The material properties of all the added beams.
+        extra_adjacency_matrix : array_like, optional
+            An adjacency matrix of int with shape (p, 2) where p <= m giving the connectivity between the beams being added and the beams already existing.
+            The first column is the indices in 'coordinates' to connect to an existing beam while the second column is the vertex ID of the corresponding existing
+            beams.
+        **additional_kwargs
+            Additional parameters for the beam (see add_beam_edge).
+
+        Raises
+        ------
+        ValueError
+            If the inter or extra adjacency matrix contains indices that are greater than the length of the coordinates matrix.
+        ValueError
+            If the inter adjacency matrix contains a pair of indices that connect to itself.
+        ValueError
+            If the extra adjacency matrix contains vertex ID's that doesn't exist.
+        """
+        coordinates = np.atleast_2d(coordinates)
+        inter_adjacency_matrix = np.unique(np.atleast_2d(inter_adjacency_matrix), axis=0)
+        if not np.issubdtype(inter_adjacency_matrix.dtype, np.integer):
+            raise TypeError(f"Inter adjecency matrix expected integers but recieved '{inter_adjacency_matrix.dtype}'.")
+        if np.count_nonzero(inter_adjacency_matrix[:, 0] - inter_adjacency_matrix[:, 1]) != len(inter_adjacency_matrix):
+            raise ValueError(f"A pair in the adjacency matrix connects to itself.")
+        if np.any(inter_adjacency_matrix > len(coordinates) - 1):
+            raise ValueError(f"The indice(s) {np.unique(inter_adjacency_matrix[inter_adjacency_matrix > len(coordinates) - 1])} doesn't exist in 'coordinates'.")
+        if extra_adjacency_matrix is not None:
+            extra_adjacency_matrix = np.unique(np.atleast_2d(extra_adjacency_matrix), axis=0)
+            if not np.issubdtype(extra_adjacency_matrix.dtype, np.integer):
+                raise TypeError(f"Extra adjecency matrix expected integers but recieved '{extra_adjacency_matrix.dtype}'.")
+            if np.any(extra_adjacency_matrix[:, 0] > len(coordinates) - 1):
+                raise ValueError(f"The indice(s) {np.unique(extra_adjacency_matrix[extra_adjacency_matrix[:, 0] > len(coordinates) - 1, 0])} doesn't exist in 'coordinates'.")
+            if np.any(extra_adjacency_matrix[:, 1] > len(self.graph.vs) - 1):
+                raise ValueError(f"The vertex ID(s) {np.unique(extra_adjacency_matrix[extra_adjacency_matrix[:, 1] > len(self.graph.vs) - 1, 1])} doesn't exist in the beam lattice.")
+
+        vertex_count = len(self.graph.vs)
+
+        for i, (start_coordinates_index, end_coordinates_index) in enumerate(inter_adjacency_matrix):
+            coordinates_to_add = None
+            vertex_IDs_to_connect = None
+            # If start vertex hasn't already been added.
+            if start_coordinates_index not in inter_adjacency_matrix[:i]:
+                coordinates_to_add = coordinates[start_coordinates_index]
+            else:
+                vertex_IDs_to_connect = start_coordinates_index + vertex_count
+
+            # If end vertex hasn't already been added.
+            if end_coordinates_index not in inter_adjacency_matrix[:i]:
+                if coordinates_to_add is not None:
+                    coordinates_to_add = np.stack((coordinates_to_add, coordinates[end_coordinates_index]))
+                else:
+                    coordinates_to_add = coordinates[end_coordinates_index]
+            else:
+                if vertex_IDs_to_connect is not None:
+                    vertex_IDs_to_connect = (vertex_IDs_to_connect, end_coordinates_index + vertex_count)
+                else:
+                    vertex_IDs_to_connect = end_coordinates_index + vertex_count
+            
+            self.add_beam_edge(vertex_IDs=vertex_IDs_to_connect, coordinates=coordinates_to_add, **material_properties, **additional_kwargs)
+
+        if extra_adjacency_matrix is not None:
+            for i, (start_coordinates_index, vertex_ID) in enumerate(extra_adjacency_matrix):
+                vertex_IDs_to_connect = (start_coordinates_index + vertex_count, vertex_ID)
+                self.add_beam_edge(vertex_IDs=vertex_IDs_to_connect, **material_properties, **additional_kwargs)
 
     @property
     def fixed_DOFs(self) -> npt.NDArray:
@@ -446,6 +524,47 @@ class Beam_Lattice:
             return force_vector
         else:
             return np.delete(force_vector, self.fixed_DOFs)
+
+    def get_transfer_matrix(self, kinematic: Literal['receptence', 'mobility', 'accelerance'], complex_frequencies: npt.ArrayLike) -> npt.NDArray:
+        """
+        Gets the full transfer matrix for the entire system.
+
+        Parameters
+        ----------
+        kinematic : Literal['receptence', 'mobility', 'accelerance']
+            The type of transfer function to return.
+        complex_frequencies : array_like
+            The complex frequencies which to evaluate the transfer matrix with shape (k,) where k is the number of complex frequencies.
+
+        Returns
+        -------
+        numpy array
+            The full transfer matrix for each complex frequency with shape (k, 2n, n) where n is the DOF in the system.
+        """
+        complex_frequencies = np.atleast_1d(complex_frequencies)
+        mass_matrix, stiffness_matrix, damping_matrix = self.get_system_level_matrices()
+        inverted_mass_matrix = np.linalg.inv(mass_matrix)
+        # Equation (5a) - Lecture 12.
+        state_matrix = np.block([[             np.zeros(mass_matrix.shape),               np.eye(len(mass_matrix))], 
+                                 [-inverted_mass_matrix @ stiffness_matrix, -inverted_mass_matrix @ damping_matrix]])
+        # Equation (5b) without B_2 - Lecture 12.
+        input_matrix = np.block([[np.zeros(mass_matrix.shape)], [inverted_mass_matrix]])
+        
+        match kinematic:
+            case 'receptence':
+                output_matrix = np.block([np.eye(len(mass_matrix)), np.zeros(mass_matrix.shape)])
+                transmission_matrix = 0
+            case 'mobility':
+                output_matrix = np.block([np.zeros(mass_matrix.shape), np.eye(len(mass_matrix))])
+                transmission_matrix = 0
+            case 'accelerance':
+                output_matrix = np.block([-inverted_mass_matrix @ stiffness_matrix, inverted_mass_matrix @ damping_matrix])
+                transmission_matrix = inverted_mass_matrix
+            case _:
+                raise ValueError(f"Recieved '{kinematic}' for parameter 'kinematic' but expected either {get_args(get_type_hints(self.get_transfer_matrix)['kinematic'])}.")
+        
+        # Equation 13 - Lecture 12.
+        return output_matrix @ np.linalg.inv(np.tile(np.eye(len(state_matrix)), (len(complex_frequencies), 1, 1)) * np.tile(complex_frequencies, (len(state_matrix), 1, 1)).T - state_matrix) @ input_matrix + transmission_matrix  
 
     @deprecated("Use Static from SystemSolver insted.")
     def get_static_vertex_and_node_displacements(self, include_fixed_vertices: bool = False) -> npt.NDArray:
