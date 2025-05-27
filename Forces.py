@@ -1,6 +1,7 @@
 from SystemModels import Beam_Lattice
 import numpy as np
 import numpy.typing as npt
+from scipy.interpolate import make_interp_spline as spline
 from typing import Literal, Callable
 
 def continous_force_from_array(forces: npt.ArrayLike, timesteps: npt.ArrayLike, cyclic: bool = True) -> Callable[[float], npt.NDArray]:
@@ -37,6 +38,80 @@ def continous_force_from_array(forces: npt.ArrayLike, timesteps: npt.ArrayLike, 
                 return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     
     return continous_force
+
+def stationary_input_shaping_force_toeplitz_method(model: Beam_Lattice, timesteps: npt.ArrayLike, stationary_vertex_IDs: npt.ArrayLike, input_vertex_IDs: npt.NDArray, solver_timestep: float) -> None:
+    """
+    Adds a time dependent force to the model that ensures minimal displacement at given vertices in the model.
+    It is done using the block toeplitz matrix for the model, the input vector U with actuators
+
+    Parameters
+    -----------
+    model : Beam_Lattice
+        The model to apply the input shaping to.
+    timesteps : array_like
+        The timesteps of the force vectors to analyze.
+    stationary_vertex_IDs : array_like
+        The vertex ID(s) of the model to be stationary.
+        All the DOF's in the vertex ID(s) will be stationary.
+    input_vertex_IDs : array_like
+        The vertex ID(s) where the input forces will be applied.
+        """
+    #error handling ensuring correct input
+    length_timesteps = len(timesteps)
+    IDs_to_DOFs = lambda IDs: np.repeat(IDs - [np.sum(np.nonzero(model.graph.vs['fixed'])) <i for i in IDs], 6) * 6 + np.tile(np.arange(6), len(IDs))
+
+    #Get vertex IDs for all relevant inputs
+    stationary_vertex_IDs = np.atleast_1d(stationary_vertex_IDs)
+    input_vertex_IDs = np.atleast_1d(input_vertex_IDs)
+    force_vertex_IDs = np.argwhere(np.array(model.graph.vs['force']) != None).reshape(-1)
+    input_force_vertex_IDs = np.union1d(input_vertex_IDs, force_vertex_IDs)
+    co_location_vertex_IDs = np.intersect1d(input_vertex_IDs, force_vertex_IDs)
+    unique_input_vertex_IDs = np.setdiff1d(input_vertex_IDs, force_vertex_IDs)
+    unique_force_vertex_IDs = np.setdiff1d(force_vertex_IDs, input_vertex_IDs)
+
+    #Get DOFs from vertex IDs
+    stationary_DOFs = IDs_to_DOFs(stationary_vertex_IDs)
+    input_DOFs = IDs_to_DOFs(input_vertex_IDs)
+    force_DOFs = IDs_to_DOFs(force_vertex_IDs)
+    input_forces_DOFs = np.union1d(input_DOFs, force_DOFs)
+    co_location_DOFs = np.intersect1d(input_DOFs, force_DOFs)
+    unique_input_DOFs = np.setdiff1d(input_DOFs, force_DOFs)
+    unique_force_DOFs = np.setdiff1d(force_DOFs, input_DOFs)
+
+    #Get forces from DOFs
+    forces = np.empty((length_timesteps, len(force_DOFs))) #2D empty array not tensor
+
+    for i, time in enumerate(timesteps):
+        forces[i, :] = model.get_force_vector(time=time)[force_DOFs].ravel()
+    #forces.flatten() #flatten to fit StateSpace
+    
+    #Get correct indices to index toeplitz matrix
+    unique_force_indices = np.tile(unique_force_DOFs, length_timesteps) + len(unique_force_DOFs)*np.repeat(unique_force_DOFs, length_timesteps).ravel()
+    unique_input_indices = np.tile(unique_input_DOFs, length_timesteps) + len(unique_input_DOFs)*np.repeat(unique_input_DOFs, length_timesteps).ravel()
+    
+    #Get toeplitz matrix and submatrices
+    complete_toeplitz = model.get_toeplitz_matrix('accelerance', input_DOFs=input_forces_DOFs, output_DOFs=stationary_DOFs, timestep=solver_timestep, number_of_timesteps=length_timesteps)
+    unique_input_toeplitz = complete_toeplitz[:, unique_input_indices]
+    unique_force_toeplitz = complete_toeplitz[:, unique_force_indices]
+
+    #Solve for the responses unsing r = h1^-1*(-h2*u)
+    input_shaped_responses = np.linalg.pinv(unique_input_toeplitz) @ (-unique_force_toeplitz @ forces.flatten())
+
+    #Return forces to IDs
+    for i, unique_input_vertex_ID in enumerate(unique_input_vertex_IDs):
+        unique_input_identifier = np.arange(i*6, i*6+6)
+        unique_input_response_indices = np.tile(unique_input_identifier, length_timesteps) + len(unique_input_vertex_IDs)*np.repeat(unique_input_identifier, length_timesteps).ravel()
+        unique_input_response = input_shaped_responses[unique_input_response_indices].reshape(length_timesteps, 6).T    
+        input_shaped_response_function = continous_force_from_array(unique_input_response, timesteps, cyclic=True)
+        model.add_forces({unique_input_vertex_ID: input_shaped_response_function})
+        
+    if co_location_vertex_IDs is not None:
+        for i, co_location_vertex_ID in enumerate(co_location_vertex_IDs): 
+            co_location_in_forces = np.where(co_location_vertex_ID == force_vertex_IDs)       
+            co_location_force = forces[:, co_location_in_forces*6:co_location_in_forces*+6].T     
+            #model.add_forces({co_location_vertex_ID: })
+    
+
 
 def stationary_input_shaping_force(model: Beam_Lattice, timesteps: npt.ArrayLike, stationary_vertex_IDs: npt.ArrayLike, input_vertex_IDs: npt.NDArray, cyclic: bool = True) -> None:
     """

@@ -1,11 +1,12 @@
 import numpy as np
 import numpy.typing as npt
-from typing import Callable, Literal, get_type_hints, get_args
+from typing import Callable, Literal
 import igraph as ig
 from collections.abc import Collection, Generator
-from scipy.linalg import block_diag, eig
+from scipy.linalg import block_diag, eigh, eig
 from warnings import deprecated
 from contextlib import contextmanager
+from scipy.linalg import expm
 from Beams import MaterialProperties
 
 class Beam_Lattice:
@@ -42,14 +43,18 @@ class Beam_Lattice:
         The total DOF of the system.
     fixed_DOFs : numpy array
         A list of the DOF's that have a fixed boundary condition applied to.
+    damping_ratio : float
+        The damping ratio applied to all modes.
     """
     def __init__(self) -> None:
         self.graph = ig.Graph()
+        self.damping_ratio = 0.0
 
     def add_beam_edge(self, number_of_elements: int, E_modulus: npt.ArrayLike, shear_modulus: npt.ArrayLike, primary_moment_of_area: npt.ArrayLike, 
                       secondary_moment_of_area: npt.ArrayLike, torsional_constant: npt.ArrayLike, density: npt.ArrayLike, 
                       cross_sectional_area: npt.ArrayLike, vertex_IDs: Collection[int, int] | int | None = None, coordinates: npt.ArrayLike | None = None, 
-                      edge_polar_rotation: float = 0.0) -> None:
+                      edge_polar_rotation: float | None = None, point_mass_location: Literal['end_vertex', 'start_vertex'] | None = None,
+                      point_mass: float | None = None, point_mass_moment_of_inertias: npt.ArrayLike = (0, 0, 0)) -> None:
         """
         Adds an edge to the graph containing a straight set of beam elements or just a single beam elemet.
 
@@ -91,6 +96,14 @@ class Beam_Lattice:
         edge_polar_rotation : float, optional
             Rotation of the beam along the beam axis [rad]. The order of rotation is polar-primary-secondary (x-z-y) so this is the first
             rotation applied to the beam. Default 0.
+        point_mass_location : str, optional
+            The location of an optional point mass. Can be either 'start_vertex' or 'end_vertex'. If 'point_mass' is not provided, this parameter
+            is ignored.
+        point_mass : float, optional
+            The mass of the optional point mass. If 'point_mass_location' is not provided this parameter is ignored.
+        point_mass_moment_of_inertias : array_like, optional
+            The moment of inertias of the optional point mass with shape (3,) in the order polar-secondary-primary (x, y, z).
+            If provided, 'point_mass_location' and 'point_mass' parameters must be provided. Default is (0, 0, 0).
         """
         # Additional parameters for the vertices.
         additional_vertex_parameters = {
@@ -193,6 +206,16 @@ class Beam_Lattice:
             edge_mass_matrix += element_pickoff_operator.T @ element_mass_matrix @ element_pickoff_operator
             edge_stiffness_matrix += element_pickoff_operator.T @ element_stiffness_matrix @ element_pickoff_operator
         
+        # Adding optional point mass.
+        if point_mass_location is not None:
+            match point_mass_location:
+                case 'end_vertex':
+                    point_mass_indices = slice(-6, None)
+                case 'start_vertex':
+                    point_mass_indices = slice(0, 6)
+            edge_mass_matrix[point_mass_indices, point_mass_indices] += np.block([[point_mass * np.eye(3),               np.zeros((3, 3))           ],
+                                                                                  [   np.zeros((3, 3)),    point_mass_moment_of_inertias * np.eye(3)]])
+
         # Rotates the mass and stiffness matrices to the global context.
         edge_primary_angle_cos, edge_primary_angle_sin = edge_vector[:2] / np.linalg.norm(edge_vector[:2]) if not np.array_equal(edge_vector[:2], (0, 0)) else (1.0, 0.0)
         edge_secondary_angle_cos, edge_secondary_angle_sin = (np.linalg.norm(edge_vector[:2]), -edge_vector[2]) / np.linalg.norm(edge_vector)
@@ -320,6 +343,17 @@ class Beam_Lattice:
         """
         return 6*(np.sum(self.graph.es['number_of_elements'], dtype=int) + self.graph.vcount() - self.graph.ecount())
 
+    def set_damping_ratio(self, damping_ratio: float) -> None:
+        """
+        Sets the damping ratio of every mode.
+
+        Parameters
+        ----------
+        damping_ratio : float
+            The damping ratio for all modes.
+        """
+        self.damping_ratio = damping_ratio
+
     def get_system_level_matrices(self, include_fixed_vertices: bool = False) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
         Calculates the system-level mass-, stiffness and damping matrices by combining all edge matrices.
@@ -375,36 +409,46 @@ class Beam_Lattice:
         eigvals, eigvecs = eig(system_stiffness_matrix, system_mass_matrix)
         # Modal mass matrix.
         modal_mass_matrix = eigvecs.T @ system_mass_matrix @ eigvecs
-        #norm_eigvecs = eigvecs @ np.diag(1/np.sqrt(np.diag(Mt)))
-        damping_ratio = 0.05
         # Modal damping matrix.
-        modal_damping_matrix = np.eye(len(eigvals)) * (2 * damping_ratio * np.sqrt(np.abs(eigvals)) * modal_mass_matrix)
+        modal_damping_matrix = np.eye(len(eigvals)) * (2 * self.damping_ratio * np.sqrt(np.abs(eigvals)) * modal_mass_matrix)
         # Damping matrix 
         system_damping_matrix = eigvecs @ modal_damping_matrix @ eigvecs.T   
         
         return system_mass_matrix, system_stiffness_matrix, system_damping_matrix
     
-    def get_eigen_freq(self):
+    def get_modal_param(self, eigen_value_sort: bool = True, convert_to_frequencies: bool = True, normalize: bool = False) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         """
-        Calculates the eigen frequencies of the system.
+        Calculates the modal parameters of the system.
+
+        Parameters
+        ----------
+        eigen_value_sort : bool, optional
+            Sort the eigen values and vectors according to the eigen values. Default true.
+        convert_to_frequencies : bool, optional
+            Convert the eigen values to frequencies (in Hz). Default true.
+        normalize : bool, optional
+            Whether the eigen vectors are mass normalized or not. Default is false.
 
         Returns
         -------
-        numpy array
-            Sorted eigen frequencies of the system with shape (n,) where n is the number of eigen frequencies.
-            The eigen frequencies are sorted in ascending order, and converted to Hz.
+        tuple of numpy array
+            The modal parameters as (eigen values, eigen vectors, damped eigen values) with shapes ((n,), (n, n), (n,)).
         """ 
         # Gets the system level matrices.
         mass_matrix, stiffness_matrix, _= self.get_system_level_matrices()
         # Calculates the eigenvalues and eigenvectors.
-        eigvals, _ = eig(stiffness_matrix, mass_matrix)
+        eigvals, eigvecs = eigh(stiffness_matrix, mass_matrix) if normalize else eig(stiffness_matrix, mass_matrix)
         # Calculates the eigen frequencies.
-        eigen_freq = np.sqrt(np.abs(eigvals)) / (2*np.pi)
+        eigvals = np.sqrt(np.abs(eigvals)) / (2*np.pi) if convert_to_frequencies else eigvals
         # Sorts the eigen frequencies and eigenvectors.
-        sort_indices = np.argsort(eigen_freq)
-        eigen_freq = eigen_freq[sort_indices]
+        if eigen_value_sort:
+            sort_indices = np.argsort(eigvals)
+            eigvals = eigvals[sort_indices]
+            eigvecs = eigvecs[:, sort_indices]
+            
+        damped_freq = eigvals * np.sqrt(1 - self.damping_ratio**2) # Damping ratio of 0.05
 
-        return eigen_freq
+        return eigvals, eigvecs, damped_freq
 
     def fix_vertices(self, fixed_vertex_IDs: Collection[int]) -> None:
         """
@@ -525,6 +569,86 @@ class Beam_Lattice:
         else:
             return np.delete(force_vector, self.fixed_DOFs)
 
+    def get_state_space_matrices(self, output_kinematic: Literal['receptence', 'mobility', 'accelerance'], 
+                                 input_DOFs: tuple[int] | None = None, 
+                                 output_DOFs: tuple[int] | None = None,
+                                 timestep: float | None = None
+                                 ) -> tuple[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
+        """
+        Gets the input- output, state-, and transmission matrices in the first order formulation given m outputs and r inputs.
+
+        Parameters
+        ----------
+        output_kinematic : str
+            The type of kinematic the ouput vector should be. Can be either 'receptence', 'mobility' or 'accelerance'.
+        input_DOFs : tuple of int, optional
+            The DOFs in the system level matrices with shape (r,) that relate to the inputs (must be unique). If not specified,
+            all are chosen.
+        output_DOFs : tuple of int, optional
+            The DOFs in the system level matrices with shape (m,) that relate to the outputs (must be unique). If not specified,
+            all are chosen.
+        timesteps : float, optional
+            The timestep of the inputs and outputs. If not provided the matrices are in the continuous time domain. 
+
+        Returns
+        tuple of 4 numpy arrays
+            The four matrices in the order (state, input, output, transmission) with shapes ((2n, 2n), (2n, r), (m, 2n), (m, r))
+            where n is the total number of DOF in the system.
+        """
+        # Error handling.
+        input_DOFs = np.asarray(input_DOFs) if input_DOFs is not None else np.arange(self.system_DOF - len(self.fixed_DOFs))
+        output_DOFs = np.asarray(output_DOFs) if output_DOFs is not None else np.arange(self.system_DOF - len(self.fixed_DOFs))
+        unique_inputs, unique_input_counts = np.unique(input_DOFs, return_counts=True)
+        input_dublicate_mask = unique_input_counts > 1
+        if np.any(input_dublicate_mask):
+            raise ValueError(f"'input_DOFs' is not unique. DOF(s) {unique_inputs[input_dublicate_mask]} are repeated.")
+        unique_outputs, unique_output_counts = np.unique(output_DOFs, return_counts=True)
+        output_dublicate_mask = unique_output_counts > 1
+        if np.any(output_dublicate_mask):
+            raise ValueError(f"'output_DOFs' is not unique. DOF(s) {unique_outputs[output_dublicate_mask]} are repeated.")
+        mass_matrix, stiffness_matrix, damping_matrix = self.get_system_level_matrices()
+        if max(input_DOFs) > len(mass_matrix)-1:
+            raise ValueError(f"DOF indices {input_DOFs[input_DOFs > len(mass_matrix)-1]} in 'input_DOFs' are out of bounds with system DOF of {len(mass_matrix)}.")
+        if max(output_DOFs) > len(mass_matrix)-1:
+            raise ValueError(f"DOF indices {output_DOFs[output_DOFs > len(mass_matrix)-1]} in 'output_DOFs' are out of bounds with system DOF of {len(mass_matrix)}.")
+        
+        mass_matrix_inverted = np.linalg.inv(mass_matrix)
+        number_of_DOFs = len(mass_matrix)
+        # Creating the input distribution matrix.
+        input_distribution_matrix = np.zeros((number_of_DOFs, len(input_DOFs)))
+        for i, DOF in enumerate(input_DOFs):
+            input_distribution_matrix[DOF, i] = 1
+        # Creates the input and state matrix.
+        input_matrix = np.block([[np.zeros((number_of_DOFs, len(input_DOFs)))], 
+                                 [mass_matrix_inverted @ input_distribution_matrix]])
+        continuous_state_matrix = np.block([[np.zeros((number_of_DOFs, number_of_DOFs)), np.eye(number_of_DOFs)],
+                                            [-mass_matrix_inverted @ stiffness_matrix, -mass_matrix_inverted @ damping_matrix]])
+        if timestep is not None:
+            state_matrix = expm(timestep * continuous_state_matrix)
+            input_matrix = np.linalg.inv(continuous_state_matrix) @ (state_matrix - np.eye(len(state_matrix))) @ input_matrix
+        else:
+            state_matrix = continuous_state_matrix
+        # Generates the output matrix.
+        receptence_output_matrix = np.zeros((len(output_DOFs), number_of_DOFs))
+        mobility_output_matrix = np.zeros((len(output_DOFs), number_of_DOFs))
+        accelerance_output_matrix = np.zeros((len(output_DOFs), number_of_DOFs))
+        for i, DOF in enumerate(output_DOFs):
+            match output_kinematic:
+                case 'receptence':
+                    receptence_output_matrix[i, DOF] = 1
+                case 'mobility':
+                    mobility_output_matrix[i, DOF] = 1
+                case 'accelerance':
+                    accelerance_output_matrix[i, DOF] = 1
+                case _:
+                    raise ValueError(f"The parameter 'output_kinematic expected either 'receptence', 'mobility', or 'accelerance' but recieved '{output_kinematic}'.")
+        output_matrix = np.block([receptence_output_matrix - accelerance_output_matrix @ mass_matrix_inverted @ stiffness_matrix, 
+                                  mobility_output_matrix - accelerance_output_matrix @ mass_matrix_inverted @ damping_matrix])
+        # Generates the transmission matrix.
+        transmission_matrix = accelerance_output_matrix @ mass_matrix_inverted @ input_distribution_matrix
+
+        return state_matrix, input_matrix, output_matrix, transmission_matrix
+
     def get_transfer_matrix(self, kinematic: Literal['receptence', 'mobility', 'accelerance'], complex_frequencies: npt.ArrayLike) -> npt.NDArray:
         """
         Gets the full transfer matrix for the entire system.
@@ -565,6 +689,37 @@ class Beam_Lattice:
         
         # Equation 13 - Lecture 12.
         return output_matrix @ np.linalg.inv(np.tile(np.eye(len(state_matrix)), (len(complex_frequencies), 1, 1)) * np.tile(complex_frequencies, (len(state_matrix), 1, 1)).T - state_matrix) @ input_matrix + transmission_matrix  
+
+    def get_toeplitz_matrix(self, output_kinematic: Literal['receptence', 'mobility', 'accelerance'], 
+                                  input_DOFs: tuple[int], 
+                                  output_DOFs: tuple[int],
+                                  timestep: float,
+                                  number_of_timesteps: int
+                                  ) -> npt.NDArray:
+        """
+        Generates the block lower triangular toeplitz matrix given m outputs and r inputs.
+
+        Parameters
+        ----------
+        output_kinematic : str
+            The type of kinematic the ouput vector should be. Can be either 'receptence', 'mobility' or 'accelerance'.
+        input_DOFs : tuple of int
+            The DOFs in the system level matrices with shape (r,) that relate to the inputs (must be unique).
+        output_DOFs : tuple of int
+            The DOFs in the system level matrices with shape (m,) that relate to the outputs (must be unique).
+        timestep : float
+            The timesteps of the inputs and outputs.
+        """
+        state_matrix, input_matrix, output_matrix, transmission_matrix = self.get_state_space_matrices(output_kinematic, input_DOFs, output_DOFs, timestep)
+        toeplitz_matrix_row = np.block([transmission_matrix, *(np.zeros(transmission_matrix.shape),)*(number_of_timesteps-1)])
+        toeplitz_matrix = np.empty((number_of_timesteps*len(output_DOFs), number_of_timesteps*len(input_DOFs)))
+        state_matrix_powered = np.eye(len(state_matrix))
+        for block_row_number in range(number_of_timesteps):
+            block_row_indices = slice(block_row_number*len(output_DOFs), block_row_number*len(output_DOFs)+len(output_DOFs))
+            toeplitz_matrix[block_row_indices] = toeplitz_matrix_row
+            toeplitz_matrix_row = np.block([output_matrix @ state_matrix_powered @ input_matrix, toeplitz_matrix_row[:, :-len(input_DOFs)]])
+            state_matrix_powered @= state_matrix
+        return toeplitz_matrix
 
     @deprecated("Use Static from SystemSolver insted.")
     def get_static_vertex_and_node_displacements(self, include_fixed_vertices: bool = False) -> npt.NDArray:
@@ -712,7 +867,7 @@ if __name__ == "__main__":
     system = Beam_Lattice()
     
     system.add_beam_edge(
-        number_of_elements=1, 
+        number_of_elements=5, 
         E_modulus=2.1*10**11, 
         shear_modulus=7.9*10**10,
         primary_moment_of_area=2.157*10**-8,
@@ -721,7 +876,10 @@ if __name__ == "__main__":
         density=7850, 
         cross_sectional_area=1.737*10**-4, 
         coordinates=[[0, 0, 0], [0, 0, 1.7]],
-        edge_polar_rotation=0
+        edge_polar_rotation=0,
+        point_mass=1.31,
+        point_mass_moment_of_inertias=(0,0,0),
+        point_mass_location='end_vertex'
     )
 
 
@@ -729,15 +887,18 @@ if __name__ == "__main__":
     system.add_forces({1: lambda t: [0, 0, 0, 0, 0, 0]})
     system.fix_vertices((0,))
     displaced_shape_points = system.get_displaced_shape_position()
-    output = system.get_eigen_freq()
+    output, eigvec, damped = system.get_modal_param()
     
     for displaced_shape_point in displaced_shape_points:
         ax.plot(displaced_shape_point[:, 0], displaced_shape_point[:, 1], displaced_shape_point[:, 2], linewidth=2.0, linestyle='--')
-    MM, KK,_ = system.get_system_level_matrices()
-    eigvals, eigvecs = eig(KK, MM)
-
-    print(MM,KK)
-    print(output)
+    #MM, KK,_ = system.get_system_level_matrices()
+    #eigvals, eigvecs = eig(KK, MM)
+    
+    #print(eigvecs.shape)
+    #print(output.shape)
+    print(damped)
+    #print(MM,KK)
+    #print(output)
 
     ax.axis('equal')
     ax.set_xlabel('x')
