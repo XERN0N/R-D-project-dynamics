@@ -53,7 +53,7 @@ class Beam_Lattice:
     def add_beam_edge(self, number_of_elements: int, E_modulus: npt.ArrayLike, shear_modulus: npt.ArrayLike, primary_moment_of_area: npt.ArrayLike, 
                       secondary_moment_of_area: npt.ArrayLike, torsional_constant: npt.ArrayLike, density: npt.ArrayLike, 
                       cross_sectional_area: npt.ArrayLike, vertex_IDs: Collection[int, int] | int | None = None, coordinates: npt.ArrayLike | None = None, 
-                      edge_polar_rotation: float | None = None, point_mass_location: Literal['end_vertex', 'start_vertex'] | None = None,
+                      edge_polar_rotation: float = 0.0, point_mass_location: Literal['end_vertex', 'start_vertex'] | None = None,
                       point_mass: float | None = None, point_mass_moment_of_inertias: npt.ArrayLike = (0, 0, 0)) -> None:
         """
         Adds an edge to the graph containing a straight set of beam elements or just a single beam elemet.
