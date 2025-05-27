@@ -4,6 +4,9 @@ from SystemModels import Beam_Lattice
 from abc import ABC, abstractmethod
 from typing import Self
 from dataclasses import dataclass
+from time import time
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
 @dataclass
 class Solution:
@@ -296,7 +299,48 @@ class Newmark(Solver):
         effective_damping_acceleration = self.time_increment * (self.gamma/(2*self.beta)-1) * acceleration
         return force + mass @ (effective_mass_displacement + effective_mass_velocity + effective_mass_acceleration) + \
                     damping @ (effective_damping_displacement + effective_damping_velocity + effective_damping_acceleration)
+
+def animate_solution(solver: Solver, playback_rate: float = 1.0, scaling_factor: float = 1.0, target_FPS: float = 30.0, **line_kwargs) -> None:
+    """
+    Uses matplotlibs animate class to animate the motion of the model.
+
+    Parameters
+    ----------
+    solver : Solver
+        The solver used. Must have run solve() and must have the attributes 'end_time' and 'time_increment'.
+    playback_rate : float, optional
+        The playback rate of the animation. default 1.0.
+    scaling_factor : float, optional
+        The scaling factor of the deflections. Default 1.0.
+    target_FPS : float, optional
+        The target FPS of the animation. The FPS will always be lower than this.
+    **line_kwargs
+        Additional parameters passed to plt.plot().
+    """
+    displaced_shape_points = solver.get_displaced_shape_position(scaling_factor)
+    plot_lines = list()
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    for displaced_shape_point in displaced_shape_points:
+        plot_lines.append(ax.plot(displaced_shape_point[0, :, 0], displaced_shape_point[0, :, 1], displaced_shape_point[0, :, 2], **line_kwargs))
     
+    frames = int(target_FPS*solver.end_time/playback_rate)
+    def update(frame):
+        for i, lines in enumerate(plot_lines):
+            for line in lines:
+                line.set_data_3d(*displaced_shape_points[i][int(solver.end_time/solver.time_increment*frame/frames), :].T)
+        ax.set_title(f"t = {solver.end_time*frame/frames:.3f} s")
+        return plot_lines
+
+    ani = animation.FuncAnimation(fig=fig, func=update, frames=frames, interval=int(1000/target_FPS))
+
+    ax.axis('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+    ax.grid()
+    plt.show()
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
