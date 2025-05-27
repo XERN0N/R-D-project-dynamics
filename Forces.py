@@ -86,8 +86,8 @@ def stationary_input_shaping_force_toeplitz_method(model: Beam_Lattice, timestep
     #forces.flatten() #flatten to fit StateSpace
     
     #Get correct indices to index toeplitz matrix
-    unique_force_indices = np.tile(unique_force_DOFs, length_timesteps) + len(unique_force_DOFs)*np.repeat(unique_force_DOFs, length_timesteps).ravel()
-    unique_input_indices = np.tile(unique_input_DOFs, length_timesteps) + len(unique_input_DOFs)*np.repeat(unique_input_DOFs, length_timesteps).ravel()
+    unique_force_indices = np.tile(unique_force_DOFs, length_timesteps) + len(input_forces_DOFs)*np.repeat(np.arange(length_timesteps), len(unique_force_DOFs))
+    unique_input_indices = np.tile(unique_input_DOFs, length_timesteps) + len(input_forces_DOFs)*np.repeat(np.arange(length_timesteps), len(unique_input_DOFs))
     
     #Get toeplitz matrix and submatrices
     complete_toeplitz = model.get_toeplitz_matrix('accelerance', input_DOFs=input_forces_DOFs, output_DOFs=stationary_DOFs, timestep=solver_timestep, number_of_timesteps=length_timesteps)
@@ -95,12 +95,12 @@ def stationary_input_shaping_force_toeplitz_method(model: Beam_Lattice, timestep
     unique_force_toeplitz = complete_toeplitz[:, unique_force_indices]
 
     #Solve for the responses unsing r = h1^-1*(-h2*u)
-    input_shaped_responses = np.linalg.pinv(unique_input_toeplitz) @ (-unique_force_toeplitz @ forces.flatten())
+    input_shaped_responses = -np.linalg.pinv(unique_input_toeplitz) @ unique_force_toeplitz @ forces.flatten()
 
     #Return forces to IDs
     for i, unique_input_vertex_ID in enumerate(unique_input_vertex_IDs):
         unique_input_identifier = np.arange(i*6, i*6+6)
-        unique_input_response_indices = np.tile(unique_input_identifier, length_timesteps) + len(unique_input_vertex_IDs)*np.repeat(unique_input_identifier, length_timesteps).ravel()
+        unique_input_response_indices = np.tile(unique_input_identifier, length_timesteps) + len(unique_input_DOFs)*np.repeat(np.arange(length_timesteps), len(unique_input_DOFs))
         unique_input_response = input_shaped_responses[unique_input_response_indices].reshape(length_timesteps, 6).T    
         input_shaped_response_function = continous_force_from_array(unique_input_response, timesteps, cyclic=True)
         model.add_forces({unique_input_vertex_ID: input_shaped_response_function})
