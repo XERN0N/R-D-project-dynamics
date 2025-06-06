@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+
+  "inputs": [
+    {
+      "id": "platform",
+      "type": "pickString",
+      "description": "Choose the platform",
+      "options": ["Windows", "Linux"],
+      "default": "Linux"
+    },
+    {
+      "id": "run_instance",
+      "type": "pickString",
+      "description": "Choose the instance",
+      "options": ["bin/linux/main", "bin/mingw/main.exe"],
+      "default": "bin/linux/main"
+    }
+  ],
+
+  "tasks": [
+    {
+      "label": "Build with chosen platform",
+      "type": "shell",
+      "command": "make",
+      "args": ["PLATFORM=${input:platform}"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+        "label": "Run Executable",
+        "type": "shell",
+        "command": "${workspaceFolder}/${input:run_instance}"
+    }
+  ]
+}
