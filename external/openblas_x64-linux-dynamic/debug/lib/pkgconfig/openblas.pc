@@ -1,0 +1,15 @@
+prefix=${pcfiledir}/../..
+libdir=${prefix}/lib
+libnameprefix=
+libnamesuffix=
+libsuffix=
+includedir=${prefix}/../include/openblas
+
+openblas_config=USE_64BITINT= NO_CBLAS= NO_LAPACK=1 NO_LAPACKE=1 DYNAMIC_ARCH=OFF DYNAMIC_OLDER=OFF NO_AFFINITY=ON USE_OPENMP= ZEN MAX_THREADS=16 
+Name: OpenBLAS
+Description: OpenBLAS is an optimized BLAS library based on GotoBLAS2 1.13 BSD version
+Version: 0.3.29
+URL: https://github.com/OpenMathLib/OpenBLAS
+Libs: "-L${libdir}" "-l${libnameprefix}openblas${libnamesuffix}${libsuffix}"
+Cflags: "-I${includedir}"  
+
